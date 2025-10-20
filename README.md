@@ -1,0 +1,1 @@
+# Fast inference of ternary-binary convolutional neural networks on ARM processors

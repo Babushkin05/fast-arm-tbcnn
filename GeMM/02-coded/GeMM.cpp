@@ -17,7 +17,7 @@ static inline uint64_t load_u64(const uint8_t* p) {
 // n mod 64 == 0
 // m mod 8 == 0
 // k mod 8 == 0
-std::pair<uint8_t*, uint8_t*> GeMM(uint8_t * Ap, uint8_t * Am, uint8_t * B, uint32_t m, uint32_t n, uint32_t k) {
+inline std::pair<uint8_t*, uint8_t*> GeMM(uint8_t * Ap, uint8_t * Am, uint8_t * B, uint32_t m, uint32_t n, uint32_t k) {
     if ((m % 8) != 0 || (n % 64) != 0 || (k % 8) != 0) {
         throw std::invalid_argument("GeMM: m and k must be multiples of 8; n must be multiple of 64");
     }

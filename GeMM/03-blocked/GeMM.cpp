@@ -5,16 +5,7 @@
 #include <stdexcept>
 #include <bit>
 #include <utility>
-
-// Pipeline parameters (tunable for cache sizes)
-// Example defaults for AArch64 mobile CPUs (adjust after profiling)
-struct TilingParams {
-    uint32_t mblk; // outer block on rows (L2)
-    uint32_t nblk; // outer block on cols (L2)
-    uint32_t kblk; // outer block on depth (L2)
-    uint32_t mmk;  // microkernel rows (L1)
-    uint32_t nmk;  // microkernel cols (L1)
-};
+#include "GeMM.hpp"
 
 static inline uint64_t load_u64(const uint8_t* p) {
     uint64_t v;

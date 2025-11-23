@@ -12,4 +12,4 @@ FetchContent_MakeAvailable(Catch2)
 
 add_subdirectory(01-naive)
 add_subdirectory(02-coded)
-
+add_subdirectory(03-blocked)

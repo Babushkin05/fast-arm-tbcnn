@@ -20,7 +20,7 @@ struct TilingParams {
 // n mod 64 == 0
 // m mod 8 == 0
 // k mod 8 == 0
-inline std::pair<uint8_t*, uint8_t*> GemmTBN_Blocked(
+std::pair<uint8_t*, uint8_t*> GemmTBN_Blocked(
     const uint8_t* Ap, const uint8_t* Am, const uint8_t* B,
     uint32_t m, uint32_t n, uint32_t k,
     const TilingParams& tp

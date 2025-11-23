@@ -4,8 +4,8 @@
 #include <cstring>
 #include <utility>
 #include <catch2/catch_all.hpp>
-#include <matrices_to_test.hpp>
-#include <GeMM.hpp>
+#include "matrices_to_test.hpp"
+#include "GeMM.hpp"
 
 inline std::pair<uint8_t*, uint8_t*>
 PackTernaryRowMajor(const int8_t* A, uint32_t m, uint32_t n)
@@ -124,7 +124,7 @@ TEST_CASE("Case 1") {
     auto [Ap, Am] = PackTernaryRowMajor(A, m, k);
     auto Bb = PackBinaryColMajor(B, n, k);
 
-    auto [Cp, Cm] = GeMM(Ap, Am, Bb, m, n, k);
+    auto [Cp, Cm] = GeMMCoded(Ap, Am, Bb, m, n, k);
     auto Cl = UnpackTernaryRowMajor(Cp, Cm, m, k);
 
     CompareWithGlobalC(Cl, m, k);

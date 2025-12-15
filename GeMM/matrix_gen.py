@@ -18,13 +18,13 @@ def main():
     np.random.seed(42)
 
     # Generate A in {-1, 0, 1}
-    A = np.random.choice([-1, 0, 1], size=(64, 64)).astype(np.int8)
+    A = np.random.choice([-1, 0, 1], size=(128, 128)).astype(np.int8)
 
     # Generate B in {-1, 1}
-    B = np.random.choice([-1, 1], size=(64, 64)).astype(np.int8)
+    B = np.random.choice([-1, 1], size=(128, 128)).astype(np.int8)
 
     # Multiply 
-    C = np.sign(A.astype(np.int8) @ B.astype(np.int8)) # 64x64 int8
+    C = np.sign(A.astype(np.int8) @ B.astype(np.int8)) # 128x128 int8
 
     # Compose C++ content
     header = "#include <cstdint>\n\n"

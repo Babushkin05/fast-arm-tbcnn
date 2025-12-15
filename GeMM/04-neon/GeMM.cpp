@@ -1,4 +1,3 @@
-// tbn_blocked_gemm.hpp
 #pragma once
 #include <cstdint>
 #include <cstring>
@@ -6,12 +5,25 @@
 #include <bit>
 #include <utility>
 #include "GeMM.hpp"
+#include <arm_neon.h>
+#include <iostream>
 
 static inline uint64_t load_u64(const uint8_t* p) {
     uint64_t v;
     std::memcpy(&v, p, sizeof(uint64_t));
     return v;
 }
+
+static inline int popcount_u8x16(uint8x16_t v) {
+    uint8x16_t cnt = vcntq_u8(v);
+
+    uint16x8_t s16 = vpaddlq_u8(cnt);
+    uint32x4_t s32 = vpaddlq_u16(s16);
+    uint64x2_t s64 = vpaddlq_u32(s32);
+
+    return (int)(vgetq_lane_u64(s64, 0) + vgetq_lane_u64(s64, 1));
+}
+
 
 // Microkernel: compute a mmk x nmk.
 // AblockP/AblockM: layout is row-major by mmk rows, contiguous columns across keff,
@@ -239,8 +251,10 @@ UnpackTernaryRowMajor(const uint8_t* Cplus, const uint8_t* Cminus,
                 C[i * k + j] = -1;
             else if (!p && !mbit)
                 C[i * k + j] = 0;
-            else
+            else {
+                std::cout<<i<<" "<<j<<"\n";
                 throw std::runtime_error("UnpackTernary: invalid (1,1) state");
+            }
         }
     }
 

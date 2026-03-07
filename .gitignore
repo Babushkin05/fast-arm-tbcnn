@@ -1,6 +1,6 @@
 GeMM/build
-.vscode
-
 GeMM/_deps
+
+.vscode
 
 *CMakeFiles*

@@ -1,4 +1,3 @@
-// tbn_blocked_gemm.hpp
 #pragma once
 #include <cstdint>
 #include <cstring>
@@ -6,12 +5,25 @@
 #include <bit>
 #include <utility>
 #include "GeMM.hpp"
+#include <arm_neon.h>
+#include <iostream>
 
 static inline std::uint64_t load_u64(const std::uint8_t* p) {
     std::uint64_t v;
     std::memcpy(&v, p, sizeof(std::uint64_t));
     return v;
 }
+
+static inline int popcount_u8x16(uint8x16_t v) {
+    uint8x16_t cnt = vcntq_u8(v);
+
+    uint16x8_t s16 = vpaddlq_u8(cnt);
+    uint32x4_t s32 = vpaddlq_u16(s16);
+    uint64x2_t s64 = vpaddlq_u32(s32);
+
+    return (int)(vgetq_lane_u64(s64, 0) + vgetq_lane_u64(s64, 1));
+}
+
 
 // Microkernel: compute a mmk x nmk.
 // AblockP/AblockM: layout is row-major by mmk rows, contiguous columns across keff,
@@ -108,11 +120,16 @@ static inline void PackB_SubBlock_ColMajor(
 // n mod 64 == 0
 // m mod 8 == 0
 // k mod 8 == 0
-std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
-    const std::uint8_t* Ap, const std::uint8_t* Am, const std::uint8_t* B,
+std::pair<std::unique_ptr<std::uint8_t[]>, std::unique_ptr<std::uint8_t[]>> GemmTBN_Blocked(
+    std::pair<std::unique_ptr<const std::uint8_t[]>, std::unique_ptr<const std::uint8_t[]>> A,
+    std::unique_ptr<const std::uint8_t[]> B,
     std::uint32_t m, std::uint32_t n, std::uint32_t k,
     const TilingParams& tp
 ) {
+    // Extract raw pointers from RAII containers for internal use (no ownership transfer here).
+    const std::uint8_t* Ap = A.first ? A.first.get() : nullptr;
+    const std::uint8_t* Am = A.second? A.second.get() : nullptr;
+    const std::uint8_t* Bptr = B ? B.get() : nullptr;
     // Constraints for simple pipeline
     if ((m % tp.mmk) || (k % tp.nmk) || (n % 64)) {
         throw std::invalid_argument("GemmTBN_Blocked: m%mmk==0, k%nmk==0, n%64==0 required");
@@ -123,10 +140,10 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
     const std::uint32_t rowBytesC = k / 8;
 
     // Output bit-planes
-    std::uint8_t* Cplus  = new std::uint8_t[static_cast<size_t>(m) * rowBytesC];
-    std::uint8_t* Cminus = new std::uint8_t[static_cast<size_t>(m) * rowBytesC];
-    std::memset(Cplus,  0, static_cast<size_t>(m) * rowBytesC);
-    std::memset(Cminus, 0, static_cast<size_t>(m) * rowBytesC);
+    std::unique_ptr<std::uint8_t[]> Cplus(new std::uint8_t[static_cast<size_t>(m) * rowBytesC]);
+    std::unique_ptr<std::uint8_t[]> Cminus(new std::uint8_t[static_cast<size_t>(m) * rowBytesC]);
+    std::memset(Cplus.get(),  0, static_cast<size_t>(m) * rowBytesC);
+    std::memset(Cminus.get(), 0, static_cast<size_t>(m) * rowBytesC);
 
     // Buffers sized by inner L1-friendly tiles
     const std::uint32_t subRowBytes = tp.kblk / 8; // keff <= kblk; we'll use keff chunks
@@ -163,7 +180,7 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
 
                         // Pack B sub-block columns [x+c : x+c+neff), rows [d : d+keff_outer)
                         PackB_SubBlock_ColMajor(
-                            B, n, x + c, neff, d, keff_outer,
+                            Bptr, n, x + c, neff, d, keff_outer,
                             Bblock
                         );
 
@@ -177,8 +194,8 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
 
                         // Scatter temp signs into bit-planes of C at position (y+r, x+c)
                         for (std::uint32_t tr = 0; tr < meff; ++tr) {
-                            std::uint8_t* CrowP = Cplus  + (y + r + tr) * rowBytesC;
-                            std::uint8_t* CrowM = Cminus + (y + r + tr) * rowBytesC;
+                            std::uint8_t* CrowP = Cplus.get()  + (y + r + tr) * rowBytesC;
+                            std::uint8_t* CrowM = Cminus.get() + (y + r + tr) * rowBytesC;
                             for (std::uint32_t tc = 0; tc < neff; ++tc) {
                                 const std::uint8_t sp = CplusTileTemp [tr * neff + tc];
                                 const std::uint8_t sm = CminusTileTemp[tr * neff + tc];
@@ -204,5 +221,42 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
     delete[] CplusTileTemp;
     delete[] CminusTileTemp;
 
-    return std::make_pair(Cplus, Cminus);
+    return std::make_pair(std::move(Cplus), std::move(Cminus));
+}
+
+
+std::unique_ptr<int8_t[]>
+UnpackTernaryRowMajor(const std::uint8_t* Cplus, const std::uint8_t* Cminus,
+                      std::uint32_t m, std::uint32_t k)
+{
+    if ((m % 8) || (k % 8))
+        throw std::invalid_argument("UnpackTernary: m,k must be multiples of 8");
+    if (!Cplus || !Cminus)
+        throw std::invalid_argument("UnpackTernary: null pointer");
+
+    const std::uint32_t rowBytes = k / 8;
+    std::unique_ptr<int8_t[]> C(new int8_t[static_cast<size_t>(m) * k]);
+
+    for (std::uint32_t i = 0; i < m; ++i) {
+        const std::uint8_t* rowP = Cplus + i * rowBytes;
+        const std::uint8_t* rowM = Cminus + i * rowBytes;
+        for (std::uint32_t j = 0; j < k; ++j) {
+            std::uint32_t byteIdx = j / 8;
+            std::uint8_t bit = static_cast<std::uint8_t>(1u << (j & 7));
+            bool p = (rowP[byteIdx] & bit) != 0;
+            bool mbit = (rowM[byteIdx] & bit) != 0;
+            if (p && !mbit)
+                C[i * k + j] = +1;
+            else if (!p && mbit)
+                C[i * k + j] = -1;
+            else if (!p && !mbit)
+                C[i * k + j] = 0;
+            else {
+                std::cout<<i<<" "<<j<<"\n";
+                throw std::runtime_error("UnpackTernary: invalid (1,1) state");
+            }
+        }
+    }
+
+    return C;
 }

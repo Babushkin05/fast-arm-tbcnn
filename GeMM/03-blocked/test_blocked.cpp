@@ -118,9 +118,9 @@ inline void CompareWithGlobalC(const int8_t* M, std::size_t m, std::size_t k)
 }
 
 TEST_CASE("Case 1") {
-    uint32_t m = 64;
-    uint32_t n = 64;
-    uint32_t k = 64;
+    uint32_t m = 128;
+    uint32_t n = 128;
+    uint32_t k = 128;
 
     auto [Ap, Am] = PackTernaryRowMajor(A, m, k);
     auto Bb = PackBinaryColMajor(B, n, k);

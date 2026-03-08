@@ -136,8 +136,8 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
     std::uint8_t* Bblock  = new std::uint8_t[static_cast<size_t>(tp.nmk) * (tp.kblk / 8)];
 
     // Temporary sign buffers for one microkernel call (mmk x nmk)
-    std::uint8_t* CplusTileTemp  = new std::uint8_t[static_cast<size_t>(tp.mmk) * tp.nmk];
-    std::uint8_t* CminusTileTemp = new std::uint8_t[static_cast<size_t>(tp.mmk) * tp.nmk];
+    std::uint8_t* CplusTileTemp  = new std::uint8_t[static_cast<size_t>(tp.mmk) * tp.nmk]();
+    std::uint8_t* CminusTileTemp = new std::uint8_t[static_cast<size_t>(tp.mmk) * tp.nmk]();
 
     for (std::uint32_t y = 0; y < m; y += tp.mblk) {
         const std::uint32_t meff_outer = (y + tp.mblk <= m) ? tp.mblk : (m - y);

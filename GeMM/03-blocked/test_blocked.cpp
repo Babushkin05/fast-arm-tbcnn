@@ -125,7 +125,7 @@ TEST_CASE("Case 1") {
     auto [Ap, Am] = PackTernaryRowMajor(A, m, k);
     auto Bb = PackBinaryColMajor(B, n, k);
 
-    TilingParams p = {.kblk = 64, .mblk = 64, .nblk = 64, .mmk = 64, .nmk = 64};
+    TilingParams p = {.kblk = 2, .mblk = 2, .nblk = 2, .mmk = 64, .nmk = 64};
 
     auto [Cp, Cm] = GemmTBN_Blocked(Ap, Am, Bb, m, n, k, p);
     auto Cl = UnpackTernaryRowMajor(Cp, Cm, m, k);

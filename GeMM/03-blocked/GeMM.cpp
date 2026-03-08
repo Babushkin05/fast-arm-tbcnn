@@ -185,7 +185,7 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
                             std::uint8_t* CrowP = Cplus  + (y + r + tr) * rowBytesC;
                             std::uint8_t* CrowM = Cminus + (y + r + tr) * rowBytesC;
                             for (std::uint32_t tc = 0; tc < neff; ++tc) {
-                                const std::uint8_t sp = CplusTileTemp [tr * neff + tc];
+                                const std::uint8_t sp = CplusTileTemp[tr * neff + tc];
                                 const std::uint8_t sm = CminusTileTemp[tr * neff + tc];
                                 const std::uint32_t col = x + c + tc;
                                 const std::uint32_t byteIdx = col / 8;

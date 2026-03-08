@@ -131,9 +131,9 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
     // Buffers sized by inner L1-friendly tiles
     const std::uint32_t subRowBytes = tp.kblk / 8; // keff <= kblk; we'll use keff chunks
     // Allocate max-sized sub-blocks
-    std::uint8_t* AblockP = new std::uint8_t[static_cast<size_t>(tp.mmk) * (tp.kblk / 8)];
-    std::uint8_t* AblockM = new std::uint8_t[static_cast<size_t>(tp.mmk) * (tp.kblk / 8)];
-    std::uint8_t* Bblock  = new std::uint8_t[static_cast<size_t>(tp.nmk) * (tp.kblk / 8)];
+    std::uint8_t* AblockP = new std::uint8_t[static_cast<size_t>(tp.mmk) * subRowBytes];
+    std::uint8_t* AblockM = new std::uint8_t[static_cast<size_t>(tp.mmk) * subRowBytes];
+    std::uint8_t* Bblock  = new std::uint8_t[static_cast<size_t>(tp.nmk) * subRowBytes];
 
     // Temporary sign buffers for one microkernel call (mmk x nmk)
     std::size_t tileTempSize = static_cast<size_t>(tp.mmk) * tp.nmk;

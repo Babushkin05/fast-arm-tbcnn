@@ -122,7 +122,7 @@ TEST_CASE("Case 1") {
     uint32_t n = 128;
     uint32_t k = 128;
 
-    auto [Ap, Am] = PackTernaryRowMajor(A, m, k);
+    auto [Ap, Am] = PackTernaryRowMajor(A, m, n);
     auto Bb = PackBinaryColMajor(B, n, k);
 
     TilingParams p = {.kblk = 128, .mblk = 128, .nblk = 128, .mmk = 64, .nmk = 64};

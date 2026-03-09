@@ -86,7 +86,7 @@ TEST_CASE("Case 1") {
   uint32_t n = 128;
   uint32_t k = 128;
 
-  auto rawA = PackTernaryRowMajor(A, m, k);
+  auto rawA = PackTernaryRowMajor(A, m, n);
   auto rawB = PackBinaryColMajor(B, n, k);
 
   // Wrap raw arrays into unique_ptr (transfer ownership into RAII containers)

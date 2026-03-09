@@ -86,7 +86,7 @@ TEST_CASE("Case 1") {
   uint32_t n = 128;
   uint32_t k = 128;
 
-  auto rawA = PackTernaryRowMajor(A, m, k);
+  auto rawA = PackTernaryRowMajor(A, m, n);
   auto rawB = PackBinaryColMajor(B, n, k);
 
   // Wrap raw arrays into unique_ptr (transfer ownership into RAII containers)
@@ -95,7 +95,7 @@ TEST_CASE("Case 1") {
           std::unique_ptr<const uint8_t[]>(rawA.second)};
   std::unique_ptr<const uint8_t[]> Bup(rawB);
 
-  TilingParams p = {.kblk = 64, .mblk = 64, .nblk = 64, .mmk = 64, .nmk = 64};
+  TilingParams p = {.kblk = 128, .mblk = 128, .nblk = 128, .mmk = 64, .nmk = 64};
 
   auto [Cp_up, Cm_up] =
       GemmTBN_Blocked(std::move(Aup), std::move(Bup), m, n, k, p);

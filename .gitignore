@@ -4,3 +4,5 @@ GeMM/_deps
 .vscode
 
 *CMakeFiles*
+
+.local

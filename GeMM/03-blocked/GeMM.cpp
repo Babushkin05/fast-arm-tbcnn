@@ -1,4 +1,4 @@
-// tbn_blocked_gemm.hpp
+// tbn_blocked_gemm.cpp
 #pragma once
 #include <cstdint>
 #include <cstring>
@@ -13,16 +13,16 @@ static inline std::uint64_t load_u64(const std::uint8_t* p) {
     return v;
 }
 
-// Microkernel: compute a mmk x nmk.
+// Microkernel: compute a mmk x nmk tile, accumulating diff values.
 // AblockP/AblockM: layout is row-major by mmk rows, contiguous columns across keff,
 // each row has keff bits -> keff/8 bytes, processed in 64-bit words.
 // Bblock: column-major by nmk cols, each col has keff bits -> keff/8 bytes.
-static inline void MicrokernelTBN_noSIMD(
+// Ctile: int32 accumulated diff values for the tile (mmk x nmk)
+static inline void MicrokernelTBN(
     const std::uint8_t* AblockP, const std::uint8_t* AblockM,
     const std::uint8_t* Bblock,
     std::uint32_t mmk, std::uint32_t nmk, std::uint32_t keff,
-    std::uint8_t* CplusTile, std::uint8_t* CminusTile,
-    std::uint32_t CRowBytes // bytes per row in full C
+    std::int32_t* Ctile, std::uint32_t CtileStride
 ) {
     const std::uint32_t rowBytesAblk = keff / 8; // bytes per row in Ablock
     const std::uint32_t colBytesBblk = keff / 8; // bytes per col in Bblock
@@ -43,6 +43,8 @@ static inline void MicrokernelTBN_noSIMD(
                 const std::uint64_t am = load_u64(ArowM + w * 8);
                 const std::uint64_t bc = load_u64(Bcol  + w * 8);
 
+                // Ternary-binary multiplication logic:
+                // (z+ , z-) = ((x+ | y^b) & (x- | ~y^b), (x+ | ~y^b) & (x- | y^b))
                 const std::uint64_t posMask = (ap | bc) & (am | ~bc);
                 const std::uint64_t negMask = (ap | ~bc) & (am | bc);
 
@@ -50,13 +52,8 @@ static inline void MicrokernelTBN_noSIMD(
                 negCount += std::popcount(negMask);
             }
 
-            const int diff = posCount - negCount;
-
-            if (diff > 0) {
-                CplusTile[r * nmk + c] = 1;
-            } else if (diff < 0) {
-                CminusTile[r * nmk + c] = 1;
-            }
+            // Accumulate diff into Ctile
+            Ctile[r * CtileStride + c] += (posCount - negCount);
         }
     }
 }
@@ -104,11 +101,11 @@ static inline void PackB_SubBlock_ColMajor(
 // A - m x n, B - n x k, tp parameters of cache; result - m x k
 // A is ternary: (0, 1) -> -1; (0, 0) -> 0; (1, 0) -> 1
 // B is binary: 0 -> 1; 1 -> -1
-// C is ternary
+// C is int32 (accumulated diff values)
 // n mod 64 == 0
-// m mod 8 == 0
-// k mod 8 == 0
-std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
+// m mod mmk == 0
+// k mod nmk == 0
+std::int32_t* GemmTBN_Blocked(
     const std::uint8_t* Ap, const std::uint8_t* Am, const std::uint8_t* B,
     std::uint32_t m, std::uint32_t n, std::uint32_t k,
     const TilingParams& tp
@@ -118,15 +115,9 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
         throw std::invalid_argument("GemmTBN_Blocked: m%mmk==0, k%nmk==0, n%64==0 required");
     }
 
-    const std::uint32_t rowBytesA = n / 8;
-    const std::uint32_t colBytesB = n / 8;
-    const std::uint32_t rowBytesC = k / 8;
-
-    // Output bit-planes
-    std::uint8_t* Cplus  = new std::uint8_t[static_cast<size_t>(m) * rowBytesC];
-    std::uint8_t* Cminus = new std::uint8_t[static_cast<size_t>(m) * rowBytesC];
-    std::memset(Cplus,  0, static_cast<size_t>(m) * rowBytesC);
-    std::memset(Cminus, 0, static_cast<size_t>(m) * rowBytesC);
+    // Output: int32 matrix m x k
+    std::int32_t* C = new std::int32_t[static_cast<size_t>(m) * k];
+    std::memset(C, 0, static_cast<size_t>(m) * k * sizeof(std::int32_t));
 
     // Buffers sized by inner L1-friendly tiles
     const std::uint32_t subRowBytes = tp.kblk / 8; // keff <= kblk; we'll use keff chunks
@@ -134,11 +125,6 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
     std::uint8_t* AblockP = new std::uint8_t[static_cast<size_t>(tp.mmk) * subRowBytes];
     std::uint8_t* AblockM = new std::uint8_t[static_cast<size_t>(tp.mmk) * subRowBytes];
     std::uint8_t* Bblock  = new std::uint8_t[static_cast<size_t>(tp.nmk) * subRowBytes];
-
-    // Temporary sign buffers for one microkernel call (mmk x nmk)
-    std::size_t tileTempSize = static_cast<size_t>(tp.mmk) * tp.nmk;
-    std::uint8_t* CplusTileTemp  = new std::uint8_t[tileTempSize];
-    std::uint8_t* CminusTileTemp = new std::uint8_t[tileTempSize];
 
     for (std::uint32_t y = 0; y < m; y += tp.mblk) {
         const std::uint32_t meff_outer = (y + tp.mblk <= m) ? tp.mblk : (m - y);
@@ -168,35 +154,17 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
                             Bblock
                         );
 
-                        // refresh temp tiles
-                        std::memset(CplusTileTemp, 0, tileTempSize);
-                        std::memset(CminusTileTemp, 0, tileTempSize);
+                        // Get pointer to the right location in C for this microkernel tile
+                        // C is stored row-major: C[row * k + col]
+                        // This tile covers rows [y+r : y+r+meff) and cols [x+c : x+c+neff)
+                        std::int32_t* Ctile = C + (y + r) * k + (x + c);
 
-                        // Run microkernel for mmk x nmk tile
-                        MicrokernelTBN_noSIMD(
+                        // Run microkernel, accumulating directly into C
+                        MicrokernelTBN(
                             AblockP, AblockM, Bblock,
                             meff, neff, keff_outer,
-                            CplusTileTemp, CminusTileTemp,
-                            rowBytesC
+                            Ctile, k  // stride is k (width of C)
                         );
-
-                        // Scatter temp signs into bit-planes of C at position (y+r, x+c)
-                        for (std::uint32_t tr = 0; tr < meff; ++tr) {
-                            std::uint8_t* CrowP = Cplus  + (y + r + tr) * rowBytesC;
-                            std::uint8_t* CrowM = Cminus + (y + r + tr) * rowBytesC;
-                            for (std::uint32_t tc = 0; tc < neff; ++tc) {
-                                const std::uint8_t sp = CplusTileTemp[tr * neff + tc];
-                                const std::uint8_t sm = CminusTileTemp[tr * neff + tc];
-                                const std::uint32_t col = x + c + tc;
-                                const std::uint32_t byteIdx = col / 8;
-                                const std::uint8_t  bitMask = static_cast<std::uint8_t>(1u << (col & 7));
-                                if (sp) {
-                                    CrowP[byteIdx] |= bitMask;
-                                } else if (sm) {
-                                    CrowM[byteIdx] |= bitMask;
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -206,8 +174,6 @@ std::pair<std::uint8_t*, std::uint8_t*> GemmTBN_Blocked(
     delete[] AblockP;
     delete[] AblockM;
     delete[] Bblock;
-    delete[] CplusTileTemp;
-    delete[] CminusTileTemp;
 
-    return std::make_pair(Cplus, Cminus);
+    return C;
 }

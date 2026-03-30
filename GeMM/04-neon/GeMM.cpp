@@ -1,4 +1,4 @@
-#pragma once
+// tbn_blocked_gemm_neon.cpp
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -6,17 +6,18 @@
 #include <utility>
 #include "GeMM.hpp"
 #include <arm_neon.h>
-#include <iostream>
 
-static inline std::uint64_t load_u64(const std::uint8_t* p) {
-    std::uint64_t v;
-    std::memcpy(&v, p, sizeof(std::uint64_t));
-    return v;
+// Load 128 bits from unaligned address
+static inline uint8x16_t load_u128(const std::uint8_t* p) {
+    return vld1q_u8(p);
 }
 
+// Compute popcount of a 128-bit vector using NEON
 static inline int popcount_u8x16(uint8x16_t v) {
+    // vcntq_u8 counts bits in each byte
     uint8x16_t cnt = vcntq_u8(v);
 
+    // Pairwise add to accumulate
     uint16x8_t s16 = vpaddlq_u8(cnt);
     uint32x4_t s32 = vpaddlq_u16(s16);
     uint64x2_t s64 = vpaddlq_u32(s32);
@@ -24,21 +25,17 @@ static inline int popcount_u8x16(uint8x16_t v) {
     return (int)(vgetq_lane_u64(s64, 0) + vgetq_lane_u64(s64, 1));
 }
 
-
-// Microkernel: compute a mmk x nmk.
-// AblockP/AblockM: layout is row-major by mmk rows, contiguous columns across keff,
-// each row has keff bits -> keff/8 bytes, processed in 64-bit words.
-// Bblock: column-major by nmk cols, each col has keff bits -> keff/8 bytes.
-static inline void MicrokernelTBN_noSIMD(
+// Microkernel: compute a mmk x nmk tile, accumulating diff values.
+// Uses NEON SIMD for 128-bit operations.
+static inline void MicrokernelTBN_NEON(
     const std::uint8_t* AblockP, const std::uint8_t* AblockM,
     const std::uint8_t* Bblock,
     std::uint32_t mmk, std::uint32_t nmk, std::uint32_t keff,
-    std::uint8_t* CplusTile, std::uint8_t* CminusTile,
-    std::uint32_t CRowBytes // bytes per row in full C
+    std::int32_t* Ctile, std::uint32_t CtileStride
 ) {
     const std::uint32_t rowBytesAblk = keff / 8; // bytes per row in Ablock
     const std::uint32_t colBytesBblk = keff / 8; // bytes per col in Bblock
-    const std::uint32_t chunks64 = rowBytesAblk / 8; // keff must be multiple of 64
+    const std::uint32_t chunks128 = rowBytesAblk / 16; // process 128 bits at a time
 
     for (std::uint32_t r = 0; r < mmk; ++r) {
         const std::uint8_t* ArowP = AblockP + r * rowBytesAblk;
@@ -50,25 +47,23 @@ static inline void MicrokernelTBN_noSIMD(
             int posCount = 0;
             int negCount = 0;
 
-            for (std::uint32_t w = 0; w < chunks64; ++w) {
-                const std::uint64_t ap = load_u64(ArowP + w * 8);
-                const std::uint64_t am = load_u64(ArowM + w * 8);
-                const std::uint64_t bc = load_u64(Bcol  + w * 8);
+            for (std::uint32_t w = 0; w < chunks128; ++w) {
+                // Load 128 bits at a time using NEON
+                uint8x16_t ap = load_u128(ArowP + w * 16);
+                uint8x16_t am = load_u128(ArowM + w * 16);
+                uint8x16_t bc = load_u128(Bcol  + w * 16);
 
-                const std::uint64_t posMask = (ap | bc) & (am | ~bc);
-                const std::uint64_t negMask = (ap | ~bc) & (am | bc);
+                // Ternary-binary multiplication logic:
+                // (z+ , z-) = ((x+ | y^b) & (x- | ~y^b), (x+ | ~y^b) & (x- | y^b))
+                uint8x16_t posMask = vandq_u8(vorrq_u8(ap, bc), vorrq_u8(am, vmvnq_u8(bc)));
+                uint8x16_t negMask = vandq_u8(vorrq_u8(ap, vmvnq_u8(bc)), vorrq_u8(am, bc));
 
-                posCount += std::popcount(posMask);
-                negCount += std::popcount(negMask);
+                posCount += popcount_u8x16(posMask);
+                negCount += popcount_u8x16(negMask);
             }
 
-            const int diff = posCount - negCount;
-
-            if (diff > 0) {
-                CplusTile[r * nmk + c] = 1;
-            } else if (diff < 0) {
-                CminusTile[r * nmk + c] = 1;
-            }
+            // Accumulate diff into Ctile
+            Ctile[r * CtileStride + c] += (posCount - negCount);
         }
     }
 }
@@ -116,45 +111,30 @@ static inline void PackB_SubBlock_ColMajor(
 // A - m x n, B - n x k, tp parameters of cache; result - m x k
 // A is ternary: (0, 1) -> -1; (0, 0) -> 0; (1, 0) -> 1
 // B is binary: 0 -> 1; 1 -> -1
-// C is ternary
-// n mod 64 == 0
-// m mod 8 == 0
-// k mod 8 == 0
-std::pair<std::unique_ptr<std::uint8_t[]>, std::unique_ptr<std::uint8_t[]>> GemmTBN_Blocked(
-    std::pair<std::unique_ptr<const std::uint8_t[]>, std::unique_ptr<const std::uint8_t[]>> A,
-    std::unique_ptr<const std::uint8_t[]> B,
+// C is int32 (accumulated diff values)
+// n mod 128 == 0  (for NEON 128-bit alignment)
+// m mod mmk == 0
+// k mod nmk == 0
+std::int32_t* GemmTBN_Blocked(
+    const std::uint8_t* Ap, const std::uint8_t* Am, const std::uint8_t* B,
     std::uint32_t m, std::uint32_t n, std::uint32_t k,
     const TilingParams& tp
 ) {
-    // Extract raw pointers from RAII containers for internal use (no ownership transfer here).
-    const std::uint8_t* Ap = A.first ? A.first.get() : nullptr;
-    const std::uint8_t* Am = A.second? A.second.get() : nullptr;
-    const std::uint8_t* Bptr = B ? B.get() : nullptr;
-    // Constraints for simple pipeline
-    if ((m % tp.mmk) || (k % tp.nmk) || (n % 64)) {
-        throw std::invalid_argument("GemmTBN_Blocked: m%mmk==0, k%nmk==0, n%64==0 required");
+    // Constraints for NEON: n and kblk must be multiple of 128 (for 128-bit chunks)
+    if ((m % tp.mmk) || (k % tp.nmk) || (n % 128) || (tp.kblk % 128)) {
+        throw std::invalid_argument("GemmTBN_Blocked: m%mmk==0, k%nmk==0, n%128==0, kblk%128==0 required for NEON");
     }
 
-    const std::uint32_t rowBytesA = n / 8;
-    const std::uint32_t colBytesB = n / 8;
-    const std::uint32_t rowBytesC = k / 8;
-
-    // Output bit-planes
-    std::unique_ptr<std::uint8_t[]> Cplus(new std::uint8_t[static_cast<size_t>(m) * rowBytesC]);
-    std::unique_ptr<std::uint8_t[]> Cminus(new std::uint8_t[static_cast<size_t>(m) * rowBytesC]);
-    std::memset(Cplus.get(),  0, static_cast<size_t>(m) * rowBytesC);
-    std::memset(Cminus.get(), 0, static_cast<size_t>(m) * rowBytesC);
+    // Output: int32 matrix m x k
+    std::int32_t* C = new std::int32_t[static_cast<size_t>(m) * k];
+    std::memset(C, 0, static_cast<size_t>(m) * k * sizeof(std::int32_t));
 
     // Buffers sized by inner L1-friendly tiles
     const std::uint32_t subRowBytes = tp.kblk / 8; // keff <= kblk; we'll use keff chunks
     // Allocate max-sized sub-blocks
-    std::uint8_t* AblockP = new std::uint8_t[static_cast<size_t>(tp.mmk) * (tp.kblk / 8)];
-    std::uint8_t* AblockM = new std::uint8_t[static_cast<size_t>(tp.mmk) * (tp.kblk / 8)];
-    std::uint8_t* Bblock  = new std::uint8_t[static_cast<size_t>(tp.nmk) * (tp.kblk / 8)];
-
-    // Temporary sign buffers for one microkernel call (mmk x nmk)
-    std::uint8_t* CplusTileTemp  = new std::uint8_t[static_cast<size_t>(tp.mmk) * tp.nmk];
-    std::uint8_t* CminusTileTemp = new std::uint8_t[static_cast<size_t>(tp.mmk) * tp.nmk];
+    std::uint8_t* AblockP = new std::uint8_t[static_cast<size_t>(tp.mmk) * subRowBytes];
+    std::uint8_t* AblockM = new std::uint8_t[static_cast<size_t>(tp.mmk) * subRowBytes];
+    std::uint8_t* Bblock  = new std::uint8_t[static_cast<size_t>(tp.nmk) * subRowBytes];
 
     for (std::uint32_t y = 0; y < m; y += tp.mblk) {
         const std::uint32_t meff_outer = (y + tp.mblk <= m) ? tp.mblk : (m - y);
@@ -180,35 +160,19 @@ std::pair<std::unique_ptr<std::uint8_t[]>, std::unique_ptr<std::uint8_t[]>> Gemm
 
                         // Pack B sub-block columns [x+c : x+c+neff), rows [d : d+keff_outer)
                         PackB_SubBlock_ColMajor(
-                            Bptr, n, x + c, neff, d, keff_outer,
+                            B, n, x + c, neff, d, keff_outer,
                             Bblock
                         );
 
-                        // Run microkernel for mmk x nmk tile
-                        MicrokernelTBN_noSIMD(
+                        // Get pointer to the right location in C for this microkernel tile
+                        std::int32_t* Ctile = C + (y + r) * k + (x + c);
+
+                        // Run NEON-optimized microkernel, accumulating directly into C
+                        MicrokernelTBN_NEON(
                             AblockP, AblockM, Bblock,
                             meff, neff, keff_outer,
-                            CplusTileTemp, CminusTileTemp,
-                            rowBytesC
+                            Ctile, k  // stride is k (width of C)
                         );
-
-                        // Scatter temp signs into bit-planes of C at position (y+r, x+c)
-                        for (std::uint32_t tr = 0; tr < meff; ++tr) {
-                            std::uint8_t* CrowP = Cplus.get()  + (y + r + tr) * rowBytesC;
-                            std::uint8_t* CrowM = Cminus.get() + (y + r + tr) * rowBytesC;
-                            for (std::uint32_t tc = 0; tc < neff; ++tc) {
-                                const std::uint8_t sp = CplusTileTemp [tr * neff + tc];
-                                const std::uint8_t sm = CminusTileTemp[tr * neff + tc];
-                                const std::uint32_t col = x + c + tc;
-                                const std::uint32_t byteIdx = col / 8;
-                                const std::uint8_t  bitMask = static_cast<std::uint8_t>(1u << (col & 7));
-                                if (sp) {
-                                    CrowP[byteIdx] |= bitMask;
-                                } else if (sm) {
-                                    CrowM[byteIdx] |= bitMask;
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -218,45 +182,6 @@ std::pair<std::unique_ptr<std::uint8_t[]>, std::unique_ptr<std::uint8_t[]>> Gemm
     delete[] AblockP;
     delete[] AblockM;
     delete[] Bblock;
-    delete[] CplusTileTemp;
-    delete[] CminusTileTemp;
-
-    return std::make_pair(std::move(Cplus), std::move(Cminus));
-}
-
-
-std::unique_ptr<int8_t[]>
-UnpackTernaryRowMajor(const std::uint8_t* Cplus, const std::uint8_t* Cminus,
-                      std::uint32_t m, std::uint32_t k)
-{
-    if ((m % 8) || (k % 8))
-        throw std::invalid_argument("UnpackTernary: m,k must be multiples of 8");
-    if (!Cplus || !Cminus)
-        throw std::invalid_argument("UnpackTernary: null pointer");
-
-    const std::uint32_t rowBytes = k / 8;
-    std::unique_ptr<int8_t[]> C(new int8_t[static_cast<size_t>(m) * k]);
-
-    for (std::uint32_t i = 0; i < m; ++i) {
-        const std::uint8_t* rowP = Cplus + i * rowBytes;
-        const std::uint8_t* rowM = Cminus + i * rowBytes;
-        for (std::uint32_t j = 0; j < k; ++j) {
-            std::uint32_t byteIdx = j / 8;
-            std::uint8_t bit = static_cast<std::uint8_t>(1u << (j & 7));
-            bool p = (rowP[byteIdx] & bit) != 0;
-            bool mbit = (rowM[byteIdx] & bit) != 0;
-            if (p && !mbit)
-                C[i * k + j] = +1;
-            else if (!p && mbit)
-                C[i * k + j] = -1;
-            else if (!p && !mbit)
-                C[i * k + j] = 0;
-            else {
-                std::cout<<i<<" "<<j<<"\n";
-                throw std::runtime_error("UnpackTernary: invalid (1,1) state");
-            }
-        }
-    }
 
     return C;
 }

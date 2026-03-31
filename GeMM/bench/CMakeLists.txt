@@ -18,7 +18,12 @@ function(add_benchmark_target IMPL_NAME IMPL_DEFINE IMPL_DIR)
     target_compile_features(bench_gemm_${IMPL_NAME} PRIVATE cxx_std_20)
 
     # Link with appropriate GeMM library
-    if(IMPL_NAME STREQUAL "02")
+    if(IMPL_NAME STREQUAL "01")
+        target_link_libraries(bench_gemm_${IMPL_NAME} PRIVATE GeMM_naive)
+        target_include_directories(bench_gemm_${IMPL_NAME} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../01-naive
+        )
+    elseif(IMPL_NAME STREQUAL "02")
         target_link_libraries(bench_gemm_${IMPL_NAME} PRIVATE GeMM_coded)
         target_include_directories(bench_gemm_${IMPL_NAME} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../02-coded
@@ -42,6 +47,7 @@ function(add_benchmark_target IMPL_NAME IMPL_DEFINE IMPL_DIR)
 endfunction()
 
 # Create benchmark targets for all implementations
+add_benchmark_target(01 USE_IMPL_01 01-naive)
 add_benchmark_target(02 USE_IMPL_02 02-coded)
 add_benchmark_target(03 USE_IMPL_03 03-blocked)
 add_benchmark_target(04 USE_IMPL_04 04-neon)

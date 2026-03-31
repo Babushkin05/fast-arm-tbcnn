@@ -11,7 +11,13 @@
 #include "runner.hpp"
 
 // Include GeMM implementation based on compile-time flag
-#if defined(USE_IMPL_02)
+#if defined(USE_IMPL_01)
+    #include "../../01-naive/GeMM.hpp"
+    #define IMPL_NAME "01-naive"
+#elif defined(USE_IMPL_02)
+    #include "../../02-coded/GeMM.hpp"
+    #define IMPL_NAME "02-coded"
+#elif defined(USE_IMPL_03)
     #include "../../02-coded/GeMM.hpp"
     #define IMPL_NAME "02-coded"
 #elif defined(USE_IMPL_03)
@@ -192,7 +198,7 @@ int main(int argc, char* argv[]) {
                 auto result = GeMMCoded(Apos.get(), Aneg.get(), B.get(), m, n, k);
                 delete[] result.first;
                 delete[] result.second;
-#elif defined(USE_IMPL_03) || defined(USE_IMPL_04)
+#elif defined(USE_IMPL_01) || defined(USE_IMPL_03) || defined(USE_IMPL_04)
                 TilingParams tp = {config.tiling.mblk, config.tiling.nblk, config.tiling.kblk,
                                    config.tiling.mmk, config.tiling.nmk};
                 std::int32_t* result = GemmTBN_Blocked(Apos.get(), Aneg.get(), B.get(), m, n, k, tp);
@@ -230,7 +236,7 @@ int main(int argc, char* argv[]) {
                 timer.stop();
                 delete[] result.first;
                 delete[] result.second;
-#elif defined(USE_IMPL_03) || defined(USE_IMPL_04)
+#elif defined(USE_IMPL_01) || defined(USE_IMPL_03) || defined(USE_IMPL_04)
                 TilingParams tp = {config.tiling.mblk, config.tiling.nblk, config.tiling.kblk,
                                    config.tiling.mmk, config.tiling.nmk};
                 std::int32_t* result = GemmTBN_Blocked(Apos.get(), Aneg.get(), B.get(), m, n, k, tp);

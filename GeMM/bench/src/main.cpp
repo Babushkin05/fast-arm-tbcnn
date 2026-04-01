@@ -18,9 +18,6 @@
     #include "../../02-coded/GeMM.hpp"
     #define IMPL_NAME "02-coded"
 #elif defined(USE_IMPL_03)
-    #include "../../02-coded/GeMM.hpp"
-    #define IMPL_NAME "02-coded"
-#elif defined(USE_IMPL_03)
     #include "../../03-blocked/GeMM.hpp"
     #define IMPL_NAME "03-blocked"
 #elif defined(USE_IMPL_04)

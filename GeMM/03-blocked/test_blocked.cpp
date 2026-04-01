@@ -133,7 +133,7 @@ TEST_CASE("128x128 - small microkernels") {
 // Test with 64x64 matrices
 // ============================================================================
 
-#include "../../.local/matrices_64x64.hpp"
+#include "matrices_64x64.hpp"
 
 TEST_CASE("64x64 - single block") {
     uint32_t m = 64, n = 64, k = 64;

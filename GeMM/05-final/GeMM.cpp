@@ -3,6 +3,7 @@
 #include <arm_neon.h>
 #include <cstring>
 #include <algorithm>
+#include <bit>
 
 namespace tbn {
 
@@ -13,17 +14,10 @@ namespace tbn {
 namespace detail {
 
 [[gnu::always_inline]]
-inline uint8x16_t load_u128(const std::uint8_t* __restrict__ p) noexcept {
-    return vld1q_u8(p);
-}
-
-[[gnu::always_inline, gnu::hot]]
-inline int popcount_u8x16(uint8x16_t v) noexcept {
-    const uint8x16_t cnt = vcntq_u8(v);
-    const uint16x8_t s16 = vpaddlq_u8(cnt);
-    const uint32x4_t s32 = vpaddlq_u16(s16);
-    const uint64x2_t s64 = vpaddlq_u32(s32);
-    return static_cast<int>(vgetq_lane_u64(s64, 0) + vgetq_lane_u64(s64, 1));
+inline std::uint64_t load_u64(const std::uint8_t* __restrict__ p) noexcept {
+    std::uint64_t v;
+    std::memcpy(&v, p, sizeof(std::uint64_t));
+    return v;
 }
 
 } // namespace detail
@@ -114,7 +108,7 @@ BinaryMatrix BinaryMatrix::pack(
 }
 
 // ============================================================================
-// Microkernel (NEON-optimized)
+// Microkernel (Hybrid NEON + scalar popcount)
 // ============================================================================
 
 namespace detail {
@@ -132,7 +126,7 @@ inline void MicrokernelTBN_NEON(
 ) noexcept {
     const std::uint32_t rowBytesAblk = keff / 8;
     const std::uint32_t colBytesBblk = keff / 8;
-    const std::uint32_t chunks128 = rowBytesAblk / 16;
+    const std::uint32_t chunks64 = rowBytesAblk / 8;  // Process 64 bits at a time
 
     for (std::uint32_t r = 0; r < mmk; ++r) {
         const std::uint8_t* __restrict__ ArowP = AblockP + r * rowBytesAblk;
@@ -144,22 +138,19 @@ inline void MicrokernelTBN_NEON(
             int posCount = 0;
             int negCount = 0;
 
-            for (std::uint32_t w = 0; w < chunks128; ++w) {
-                const uint8x16_t ap = load_u128(ArowP + w * 16);
-                const uint8x16_t am = load_u128(ArowM + w * 16);
-                const uint8x16_t bc = load_u128(Bcol  + w * 16);
+            for (std::uint32_t w = 0; w < chunks64; ++w) {
+                // Scalar 64-bit loads (direct to GPR, no NEON overhead)
+                const std::uint64_t ap = load_u64(ArowP + w * 8);
+                const std::uint64_t am = load_u64(ArowM + w * 8);
+                const std::uint64_t bc = load_u64(Bcol  + w * 8);
 
-                const uint8x16_t posMask = vandq_u8(
-                    vorrq_u8(ap, bc),
-                    vorrq_u8(am, vmvnq_u8(bc))
-                );
-                const uint8x16_t negMask = vandq_u8(
-                    vorrq_u8(ap, vmvnq_u8(bc)),
-                    vorrq_u8(am, bc)
-                );
+                // Scalar bitwise operations (very fast on modern CPUs)
+                const std::uint64_t posMask = (ap | bc) & (am | ~bc);
+                const std::uint64_t negMask = (ap | ~bc) & (am | bc);
 
-                posCount += popcount_u8x16(posMask);
-                negCount += popcount_u8x16(negMask);
+                // Hardware popcount (single instruction)
+                posCount += std::popcount(posMask);
+                negCount += std::popcount(negMask);
             }
 
             Ctile[r * CtileStride + c] += (posCount - negCount);

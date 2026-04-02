@@ -84,17 +84,17 @@ done
 
 | Implementation | RPi GFLOPS | M4 Pro GFLOPS | Ratio (M4/RPi) |
 |----------------|------------|---------------|----------------|
-| 01-naive       | 0.40       | 0.38          | 0.95×          |
-| 02-coded       | 9.73       | 17.98         | 1.85×          |
-| 03-blocked     | 9.29       | 24.57         | 2.64×          |
-| 04-neon        | 9.28       | 25.09         | 2.70×          |
-| 05-final       | 12.46      | 21.78         | 1.75×          |
+| 01-naive       | 0.40       | 2.89          | 7.2×           |
+| 02-coded       | 9.73       | 69.43         | 7.1×           |
+| 03-blocked     | 9.29       | 137.99        | 14.9×          |
+| 04-neon        | 9.28       | 137.62        | 14.8×          |
+| 05-final       | 12.46      | 127.30        | 10.2×          |
 
 **Key observations:**
-- M4 Pro is ~2-3× faster for optimized implementations (03-04)
+- M4 Pro is ~7-15× faster for optimized implementations
 - 05-final shows best performance on RPi (31.2× speedup vs naive)
 - 02-coded, 03-blocked, 04-neon show similar performance on RPi (~9-10 GFLOPS)
-- Unlike M4 Pro where 04-neon is fastest, on RPi the 05-final wins
+- Unlike M4 Pro where 03-blocked is fastest, on RPi the 05-final wins
 
 ## Implementation Notes
 

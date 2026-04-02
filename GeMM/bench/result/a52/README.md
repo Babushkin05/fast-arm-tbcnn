@@ -96,11 +96,11 @@ adb pull /sdcard/a52_*.csv .
 
 | Implementation | A52 GFLOPS | RPi GFLOPS | M4 Pro GFLOPS |
 |----------------|------------|------------|---------------|
-| 01-naive       | 0.52       | 0.40       | 0.38          |
-| **02-coded**   | **15.03**  | 9.73       | 17.98         |
-| 03-blocked     | 12.25      | 9.29       | 24.57         |
-| 04-neon        | 12.52      | 9.28       | **25.09**     |
-| 05-final       | 12.77      | **12.46**  | 21.78         |
+| 01-naive       | 0.52       | 0.40       | 2.89          |
+| **02-coded**   | **15.03**  | 9.73       | 69.43         |
+| 03-blocked     | 12.25      | 9.29       | **137.99**    |
+| 04-neon        | 12.52      | 9.28       | 137.62        |
+| 05-final       | 12.77      | **12.46**  | 127.30        |
 
 **Key insight**: Snapdragon 720G favors the simpler 02-coded implementation, possibly due to:
 - Smaller cache sizes making blocking overhead more costly

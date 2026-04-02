@@ -24,11 +24,6 @@ mblk = 256  (row block - from L2 constraint)
 nblk = 512  (col block - from L2 constraint)
 ```
 
-Calculated via:
-```bash
-../../.local/calc_tiling.sh
-```
-
 ## Benchmark Command
 
 ```bash
@@ -62,40 +57,52 @@ done
 
 | Implementation | Avg GFLOPS | Speedup vs 01-naive |
 |----------------|------------|---------------------|
-| 01-naive       | 0.38       | 1.0×                |
-| 02-coded       | 17.98      | 47.3×               |
-| 03-blocked     | 24.57      | 64.7×               |
-| **04-neon**    | **25.09**  | **66.0×**           |
-| 05-final       | 21.78      | 57.3×               |
+| 01-naive       | 2.89       | 1.0×                |
+| 02-coded       | 69.43      | 24.0×               |
+| **03-blocked** | **137.99** | **47.7×**           |
+| 04-neon        | 137.62     | 47.6×               |
+| 05-final       | 127.30     | 44.0×               |
 
 ### GFLOPS by Matrix Size
 
 | Size  | 01-naive | 02-coded | 03-blocked | 04-neon | 05-final |
 |-------|----------|----------|------------|---------|----------|
-| 128   | 0.35     | 13.02    | 21.16      | **21.32** | 16.98    |
-| 256   | 0.40     | 17.37    | 24.35      | **25.06** | 20.89    |
-| 512   | 0.40     | 20.29    | 26.50      | **26.97** | 24.08    |
-| 1024  | 0.39     | 21.22    | 26.28      | **26.98** | 25.19    |
+| 128   | 1.73     | 18.34    | 62.07      | 61.45   | 55.44    |
+| 256   | 2.86     | 30.94    | 81.69      | 77.47   | 67.35    |
+| 512   | 3.49     | 75.03    | 170.66     | **173.38** | 150.79 |
+| 1024  | 3.49     | 153.40   | **237.53** | 238.18 | 235.63   |
 
 ### GFLOPS by Matrix Type
 
 | Type           | 01-naive | 02-coded | 03-blocked | 04-neon | 05-final |
 |----------------|----------|----------|------------|---------|----------|
-| random_dense   | 0.40     | 18.02    | 24.53      | **24.88** | 21.72    |
-| random_sparse  | 0.35     | 18.09    | 24.54      | **25.19** | 21.73    |
-| dense_no_zero  | 0.40     | 17.84    | 24.60      | **25.03** | 21.66    |
-| diagonal       | 0.40     | 18.03    | 24.57      | **25.23** | 21.87    |
-| banded         | 0.38     | 18.06    | 24.63      | **25.13** | 21.83    |
-| block_sparse   | 0.36     | 17.81    | 24.57      | **25.05** | 21.90    |
+| random_dense   | 3.16     | 77.13    | **149.92** | 141.32  | 135.82   |
+| random_sparse  | 2.99     | 73.53    | 144.34     | **150.72** | 148.16 |
+| dense_no_zero  | 2.78     | 68.78    | **148.30** | 129.96  | 123.27   |
+| diagonal       | 2.79     | 65.62    | **132.31** | 128.25  | 113.93   |
+| banded         | 2.80     | 65.80    | **125.19** | 122.06  | 119.54   |
+| block_sparse   | 2.85     | 65.71    | 127.87     | **153.40** | 123.09 |
 
 ## Key observations:
 
-- **04-neon is fastest** on M4 Pro with 25.09 GFLOPS average (66× speedup vs naive)
-- 03-blocked and 04-neon show similar performance (~25 GFLOPS)
-- 05-final has slight overhead from abstractions (~4 GFLOPS slower than 04-neon)
-- Performance scales well with matrix size (26.98 GFLOPS at 1024×1024)
-- Matrix type has minimal impact on performance (~1-2% variation)
-- Scalar popcount on Apple Silicon outperforms NEON SIMD for this workload
+- **03-blocked and 04-neon are nearly identical** in performance (~138 GFLOPS average)
+- Massive **47.7× speedup** with optimized implementations vs naive
+- Performance scales dramatically with matrix size (up to 238 GFLOPS at 1024×1024)
+- Matrix type impacts performance more than on other devices (~15% variation)
+- 05-final has ~10% overhead from modern C++ abstractions
+
+## Comparison with Other Devices
+
+| Implementation | M4 Pro GFLOPS | RPi GFLOPS | A52 GFLOPS |
+|----------------|---------------|------------|------------|
+| 01-naive       | 2.89          | 0.40       | 0.52       |
+| 02-coded       | 69.43         | 9.73       | **15.03**  |
+| 03-blocked     | **137.99**    | 9.29       | 12.25      |
+| 04-neon        | 137.62        | 9.28       | 12.52      |
+| 05-final       | 127.30        | **12.46**  | 12.77      |
+
+**Key insight**: M4 Pro achieves ~10× higher performance than RPi and A52 for optimized implementations,
+demonstrating the benefits of larger caches and higher clock speeds for blocked algorithms.
 
 ## Implementation Notes
 
@@ -110,24 +117,21 @@ done
 - 64-bit word processing
 - No cache blocking
 
-### 03-blocked
+### 03-blocked (Fastest)
 - Cache-aware blocking with tiling parameters
 - 64-bit word processing with `std::popcount`
 - Pack/unpack for cache locality
+- Best overall performance on M4 Pro
 
-### 04-neon (Fastest)
-- Originally used NEON SIMD for 128-bit operations
-- **Optimized**: Replaced NEON popcount with scalar `std::popcount`
-- On Apple Silicon, scalar 64-bit operations with hardware popcount
-  are faster than NEON due to:
-  - Direct GPR loads (no NEON-GPR transfer overhead)
-  - Single-instruction hardware popcount
-  - No memory round-trips
+### 04-neon
+- NEON SIMD for 128-bit operations
+- Uses scalar popcount on Apple Silicon
+- Performance nearly identical to 03-blocked
 
 ### 05-final
 - Modern C++ API with namespaces and type safety
 - Same core algorithm as 04-neon
-- Slight overhead from abstractions (std::vector vs raw arrays)
+- ~10% overhead from abstractions
 
 ## Files
 
@@ -147,7 +151,7 @@ Each CSV contains 720 rows = 4 sizes × 6 types × 30 runs.
 
 ```csv
 device,impl,matrix_type,m,n,k,run,time_ms,gflops,mblk,nblk,kblk,mmk,nmk
-macbook-m4-pro,04-neon,random_dense,512,512,512,1,19.8,13.6,256,512,512,16,8
+macbook-m4-pro,03-blocked,random_dense,512,512,512,1,4.78,140.2,256,512,512,16,8
 ```
 
 - `device`: Device identifier

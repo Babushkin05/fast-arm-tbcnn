@@ -72,21 +72,30 @@ done
 
 | Size  | 01-naive | 02-coded | 03-blocked | 04-neon | 05-final |
 |-------|----------|----------|------------|---------|----------|
-| 128   | 0.35     | 13.02    | 21.16      | 21.32   | 16.98    |
-| 256   | 0.40     | 17.37    | 24.35      | 25.06   | 20.89    |
-| 512   | 0.40     | 20.29    | 26.50      | 26.97   | 24.08    |
-| 1024  | 0.39     | 21.22    | 26.28      | 26.98   | 25.19    |
+| 128   | 0.35     | 13.02    | 21.16      | **21.32** | 16.98    |
+| 256   | 0.40     | 17.37    | 24.35      | **25.06** | 20.89    |
+| 512   | 0.40     | 20.29    | 26.50      | **26.97** | 24.08    |
+| 1024  | 0.39     | 21.22    | 26.28      | **26.98** | 25.19    |
 
 ### GFLOPS by Matrix Type
 
 | Type           | 01-naive | 02-coded | 03-blocked | 04-neon | 05-final |
 |----------------|----------|----------|------------|---------|----------|
-| random_dense   | 0.40     | 18.02    | 24.53      | 24.88   | 21.72    |
-| random_sparse  | 0.35     | 18.09    | 24.54      | 25.19   | 21.73    |
-| dense_no_zero  | 0.40     | 17.84    | 24.60      | 25.03   | 21.66    |
-| diagonal       | 0.40     | 18.03    | 24.57      | 25.23   | 21.87    |
-| banded         | 0.38     | 18.06    | 24.63      | 25.13   | 21.83    |
-| block_sparse   | 0.36     | 17.81    | 24.57      | 25.05   | 21.90    |
+| random_dense   | 0.40     | 18.02    | 24.53      | **24.88** | 21.72    |
+| random_sparse  | 0.35     | 18.09    | 24.54      | **25.19** | 21.73    |
+| dense_no_zero  | 0.40     | 17.84    | 24.60      | **25.03** | 21.66    |
+| diagonal       | 0.40     | 18.03    | 24.57      | **25.23** | 21.87    |
+| banded         | 0.38     | 18.06    | 24.63      | **25.13** | 21.83    |
+| block_sparse   | 0.36     | 17.81    | 24.57      | **25.05** | 21.90    |
+
+## Key observations:
+
+- **04-neon is fastest** on M4 Pro with 25.09 GFLOPS average (66× speedup vs naive)
+- 03-blocked and 04-neon show similar performance (~25 GFLOPS)
+- 05-final has slight overhead from abstractions (~4 GFLOPS slower than 04-neon)
+- Performance scales well with matrix size (26.98 GFLOPS at 1024×1024)
+- Matrix type has minimal impact on performance (~1-2% variation)
+- Scalar popcount on Apple Silicon outperforms NEON SIMD for this workload
 
 ## Implementation Notes
 

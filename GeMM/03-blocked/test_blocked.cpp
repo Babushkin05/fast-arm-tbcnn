@@ -93,7 +93,7 @@ TEST_CASE("128x128 - single k-block") {
     uint32_t m = 128, n = 128, k = 128;
     auto [Ap, Am] = PackTernaryRowMajor(A, m, n);
     auto Bb = PackBinaryColMajor(B, n, k);
-    TilingParams p = {.kblk = 128, .mblk = 128, .nblk = 128, .mmk = 64, .nmk = 64};
+    TilingParams p = {.mblk = 128, .nblk = 128, .kblk = 128, .mmk = 64, .nmk = 64};
     int32_t* Cresult = GemmTBN_Blocked(Ap, Am, Bb, m, n, k, p);
     CompareWithGlobalC(Cresult, C, static_cast<size_t>(m) * k);
     delete[] Ap; delete[] Am; delete[] Bb; delete[] Cresult;
@@ -103,7 +103,7 @@ TEST_CASE("128x128 - multiple k-blocks") {
     uint32_t m = 128, n = 128, k = 128;
     auto [Ap, Am] = PackTernaryRowMajor(A, m, n);
     auto Bb = PackBinaryColMajor(B, n, k);
-    TilingParams p = {.kblk = 64, .mblk = 128, .nblk = 128, .mmk = 64, .nmk = 64};
+    TilingParams p = {.mblk = 128, .nblk = 128, .kblk = 64, .mmk = 64, .nmk = 64};
     int32_t* Cresult = GemmTBN_Blocked(Ap, Am, Bb, m, n, k, p);
     CompareWithGlobalC(Cresult, C, static_cast<size_t>(m) * k);
     delete[] Ap; delete[] Am; delete[] Bb; delete[] Cresult;
@@ -113,7 +113,7 @@ TEST_CASE("128x128 - multiple all blocks") {
     uint32_t m = 128, n = 128, k = 128;
     auto [Ap, Am] = PackTernaryRowMajor(A, m, n);
     auto Bb = PackBinaryColMajor(B, n, k);
-    TilingParams p = {.kblk = 64, .mblk = 64, .nblk = 64, .mmk = 32, .nmk = 32};
+    TilingParams p = {.mblk = 64, .nblk = 64, .kblk = 64, .mmk = 32, .nmk = 32};
     int32_t* Cresult = GemmTBN_Blocked(Ap, Am, Bb, m, n, k, p);
     CompareWithGlobalC(Cresult, C, static_cast<size_t>(m) * k);
     delete[] Ap; delete[] Am; delete[] Bb; delete[] Cresult;
@@ -123,7 +123,7 @@ TEST_CASE("128x128 - small microkernels") {
     uint32_t m = 128, n = 128, k = 128;
     auto [Ap, Am] = PackTernaryRowMajor(A, m, n);
     auto Bb = PackBinaryColMajor(B, n, k);
-    TilingParams p = {.kblk = 64, .mblk = 32, .nblk = 32, .mmk = 16, .nmk = 16};
+    TilingParams p = {.mblk = 32, .nblk = 32, .kblk = 64, .mmk = 16, .nmk = 16};
     int32_t* Cresult = GemmTBN_Blocked(Ap, Am, Bb, m, n, k, p);
     CompareWithGlobalC(Cresult, C, static_cast<size_t>(m) * k);
     delete[] Ap; delete[] Am; delete[] Bb; delete[] Cresult;
@@ -139,7 +139,7 @@ TEST_CASE("64x64 - single block") {
     uint32_t m = 64, n = 64, k = 64;
     auto [Ap, Am] = PackTernaryRowMajor(A64, m, n);
     auto Bb = PackBinaryColMajor(B64, n, k);
-    TilingParams p = {.kblk = 64, .mblk = 64, .nblk = 64, .mmk = 32, .nmk = 32};
+    TilingParams p = {.mblk = 64, .nblk = 64, .kblk = 64, .mmk = 32, .nmk = 32};
     int32_t* Cresult = GemmTBN_Blocked(Ap, Am, Bb, m, n, k, p);
     CompareWithGlobalC(Cresult, C64, static_cast<size_t>(m) * k);
     delete[] Ap; delete[] Am; delete[] Bb; delete[] Cresult;
@@ -150,7 +150,7 @@ TEST_CASE("64x64 - multiple k-blocks") {
     auto [Ap, Am] = PackTernaryRowMajor(A64, m, n);
     auto Bb = PackBinaryColMajor(B64, n, k);
     // kblk must be multiple of 64, so we can only have 1 k-block for n=64
-    TilingParams p = {.kblk = 64, .mblk = 32, .nblk = 64, .mmk = 32, .nmk = 32};
+    TilingParams p = {.mblk = 32, .nblk = 64, .kblk = 64, .mmk = 32, .nmk = 32};
     int32_t* Cresult = GemmTBN_Blocked(Ap, Am, Bb, m, n, k, p);
     CompareWithGlobalC(Cresult, C64, static_cast<size_t>(m) * k);
     delete[] Ap; delete[] Am; delete[] Bb; delete[] Cresult;
@@ -160,7 +160,7 @@ TEST_CASE("64x64 - small tiles") {
     uint32_t m = 64, n = 64, k = 64;
     auto [Ap, Am] = PackTernaryRowMajor(A64, m, n);
     auto Bb = PackBinaryColMajor(B64, n, k);
-    TilingParams p = {.kblk = 64, .mblk = 32, .nblk = 32, .mmk = 16, .nmk = 16};
+    TilingParams p = {.mblk = 32, .nblk = 32, .kblk = 64, .mmk = 16, .nmk = 16};
     int32_t* Cresult = GemmTBN_Blocked(Ap, Am, Bb, m, n, k, p);
     CompareWithGlobalC(Cresult, C64, static_cast<size_t>(m) * k);
     delete[] Ap; delete[] Am; delete[] Bb; delete[] Cresult;

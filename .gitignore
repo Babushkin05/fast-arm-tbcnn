@@ -1,4 +1,5 @@
 GeMM/build
+GeMM/build-android
 GeMM/_deps
 
 .vscode

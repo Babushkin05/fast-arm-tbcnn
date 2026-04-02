@@ -28,15 +28,15 @@ This project implements optimized GeMM operations for ternary-binary neural netw
 
 ### Performance Comparison
 
-![Device Comparison](bench/plots/figures/device_comparison.png)
+![Device Comparison](plots/figures/device_comparison.png)
 
 ### GFLOPS by Matrix Size
 
-![GFLOPS Comparison](bench/plots/figures/gflops_comparison.png)
+![GFLOPS Comparison](plots/figures/gflops_comparison.png)
 
 ### Time Distribution
 
-![Time Distribution](bench/plots/figures/time_distribution.png)
+![Time Distribution](plots/figures/time_distribution.png)
 
 ### Average GFLOPS by Device
 

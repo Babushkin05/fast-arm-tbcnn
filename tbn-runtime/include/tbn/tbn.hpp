@@ -37,6 +37,8 @@ namespace tbn {
 #include "utils/errors.hpp"
 #include "utils/logging.hpp"
 
+#include "onnx_integration/onnx_parser.hpp"
+
 /**
  * @namespace tbn
  * @brief Ternary-Binary Network Runtime namespace
@@ -51,14 +53,7 @@ namespace tbn {
  * @throws TBNError if loading fails
  */
 inline TBNModel load_model(const std::string& path) {
-    TBN_LOG_INFO("Loading model from: " + path);
-
-    // TODO: Implement actual ONNX parsing
-    auto model = TBNModel();
-    model.set_producer("tbn-runtime", get_version());
-
-    // Placeholder - would parse ONNX file
-    throw NotImplementedError("ONNX model loading not implemented yet");
+    return load_onnx_model(path);
 }
 
 /**
@@ -70,14 +65,7 @@ inline TBNModel load_model(const std::string& path) {
  * @throws TBNError if loading fails
  */
 inline TBNModel load_model_from_buffer(const void* data, size_t size) {
-    TBN_LOG_INFO("Loading model from buffer, size: " + std::to_string(size));
-
-    // TODO: Implement actual ONNX parsing
-    auto model = TBNModel();
-    model.set_producer("tbn-runtime", get_version());
-
-    // Placeholder - would parse ONNX data
-    throw NotImplementedError("ONNX buffer loading not implemented yet");
+    return load_onnx_model_from_buffer(data, size);
 }
 
 /**

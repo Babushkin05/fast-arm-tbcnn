@@ -14,8 +14,25 @@ option(TBN_ONNX_RUNTIME "Enable ONNX Runtime integration" ON)
 find_package(Threads REQUIRED)
 
 if(TBN_ONNX_RUNTIME)
-    # Will be configured later
-    # find_package(onnxruntime REQUIRED)
+    # Find ONNX library
+    find_package(ONNX REQUIRED)
+    if(NOT ONNX_FOUND)
+        message(STATUS "ONNX not found, downloading...")
+
+        # Download and build ONNX
+        include(FetchContent)
+        FetchContent_Declare(
+            onnx
+            GIT_REPOSITORY https://github.com/onnx/onnx.git
+            GIT_TAG v1.14.1
+        )
+
+        # Set ONNX options
+        set(ONNX_BUILD_TESTS OFF CACHE BOOL "Build ONNX tests" FORCE)
+        set(ONNX_BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)
+
+        FetchContent_MakeAvailable(onnx)
+    endif()
 endif()
 
 # Include directories
@@ -27,9 +44,21 @@ file(GLOB_RECURSE TBN_SOURCES
     src/*.cc
 )
 
+# For now, exclude the real ONNX parser and use the simple one
+list(REMOVE_ITEM TBN_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/onnx_integration/onnx_parser.cpp)
+
+# Add the simple ONNX parser
+list(APPEND TBN_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/onnx_integration/onnx_parser_simple.cpp)
+
 # Create library
 add_library(tbn ${TBN_SOURCES})
 target_link_libraries(tbn PUBLIC Threads::Threads)
+
+# Link ONNX if enabled
+if(TBN_ONNX_RUNTIME AND TARGET onnx_proto)
+    target_link_libraries(tbn PUBLIC onnx_proto)
+    target_compile_definitions(tbn PUBLIC TBN_ONNX_RUNTIME_ENABLED)
+endif()
 
 # Set properties
 set_target_properties(tbn PROPERTIES

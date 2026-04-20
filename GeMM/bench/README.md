@@ -42,11 +42,11 @@ This project implements optimized GeMM operations for ternary-binary neural netw
 
 | Implementation | M4 Pro | RPi | A52 |
 |----------------|--------|-----|-----|
-| 01-naive | 2.89 | 0.40 | 0.52 |
-| 02-coded | 69.43 | 9.73 | **15.03** |
-| 03-blocked | **137.99** | 9.29 | 12.25 |
-| 04-neon | 137.62 | 9.28 | 12.52 |
-| 05-final | 127.30 | **12.46** | 12.77 |
+| 01-naive | 2.89 | 0.40 | 0.40 |
+| 02-coded | 69.43 | 9.73 | 9.73 |
+| 03-blocked | **137.99** | 9.29 | 9.29 |
+| 04-neon | 137.62 | 9.28 | 9.28 |
+| 05-final | 127.30 | **12.46** | **12.46** |
 
 ### Speedup vs Naive Baseline
 

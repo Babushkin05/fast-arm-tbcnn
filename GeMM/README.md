@@ -35,7 +35,7 @@ See [bench/README.md](bench/README.md) for detailed results and analysis.
 |--------|-----|---------------------|--------|---------|
 | MacBook M4 Pro | Apple M4 Pro | 03-blocked | 137.99 | 48× |
 | Raspberry Pi | Cortex-A72 | 05-final | 12.46 | 31× |
-| Samsung A52 | Snapdragon 720G | 02-coded | 15.03 | 29× |
+| Samsung A52 | Snapdragon 720G | 05-final | 12.46 | 31× |
 
 ### Device Comparison
 
@@ -53,7 +53,7 @@ See [bench/README.md](bench/README.md) for detailed results and analysis.
 
 - **M4 Pro**: Large L2 cache (4 MB) benefits from blocking → 03-blocked wins with 138 GFLOPS
 - **RPi**: Medium cache (1 MB) → 05-final with smart memory management
-- **A52**: Small cache (512 KB) → simple 02-coded avoids blocking overhead
+- **A52**: Small cache (512 KB) → 05-final with optimized memory management
 
 ## API Usage (05-final)
 

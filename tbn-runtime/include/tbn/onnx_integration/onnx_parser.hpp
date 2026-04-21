@@ -42,27 +42,8 @@ public:
     std::string get_producer_version() const;
 };
 
-// Convenience function to load ONNX model
-inline TBNModel load_onnx_model(const std::string& path) {
-    OnnxParser parser;
-    parser.parse_from_file(path);
-
-    auto graph = parser.get_graph();
-    TBNModel model(graph);
-    model.set_producer(parser.get_producer_name(), parser.get_producer_version());
-
-    return model;
-}
-
-inline TBNModel load_onnx_model_from_buffer(const void* data, size_t size) {
-    OnnxParser parser;
-    parser.parse_from_buffer(data, size);
-
-    auto graph = parser.get_graph();
-    TBNModel model(graph);
-    model.set_producer(parser.get_producer_name(), parser.get_producer_version());
-
-    return model;
-}
+// Convenience functions to load ONNX model
+TBNModel load_onnx_model(const std::string& path);
+TBNModel load_onnx_model_from_buffer(const void* data, size_t size);
 
 } // namespace tbn

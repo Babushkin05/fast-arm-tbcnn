@@ -5,6 +5,15 @@
 #include "tbn/runtime/tensor.hpp"
 #include "tbn/runtime/model.hpp"
 
+// Standard headers
+#include <cstdint>
+#include <string>
+#include <fstream>
+#include <unordered_map>
+#include <algorithm>
+#include <iostream>
+#include <sstream>
+
 #ifdef TBN_ONNX_RUNTIME_ENABLED
 // Include ONNX headers only when ONNX support is enabled
 #include <onnx/onnx_pb.h>
@@ -12,6 +21,8 @@
 #else
 // Dummy types for compilation without ONNX
 namespace onnx {
+    class TensorProto;
+    class ValueInfoProto;
     class ModelProto {
     public:
         bool ParseFromIstream(std::istream*) { return false; }
@@ -20,6 +31,9 @@ namespace onnx {
         std::string producer_version() const { return ""; }
         int64_t model_version() const { return 0; }
         struct Graph {
+            struct Node {
+                int node_size() const { return 0; }
+            };
             int node_size() const { return 0; }
             int input_size() const { return 0; }
             int output_size() const { return 0; }
@@ -32,22 +46,13 @@ namespace onnx {
 #endif
 
 // Include standard headers
-#include <stdint>
+#include <cstdint>
 #include <string>
 #include <fstream>
 #include <unordered_map>
 #include <algorithm>
 #include <iostream>
-#include <string>
 #include <sstream>
-
-// Include ONNX headers in implementation file only
-#include <onnx/onnx_pb.h>
-#include <onnx/onnx-operators_pb.h>
-
-#include <fstream>
-#include <unordered_map>
-#include <algorithm>
 #include <iostream>
 
 namespace tbn {

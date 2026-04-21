@@ -45,37 +45,10 @@ namespace tbn {
  */
 namespace tbn {
 
-/**
- * @brief Load a TBN model from ONNX file
- *
- * @param path Path to ONNX model file
- * @return TBNModel loaded model
- * @throws TBNError if loading fails
- */
-inline TBNModel load_model(const std::string& path) {
-    return load_onnx_model(path);
-}
-
-/**
- * @brief Load a TBN model from memory buffer
- *
- * @param data Pointer to ONNX model data
- * @param size Size of model data in bytes
- * @return TBNModel loaded model
- * @throws TBNError if loading fails
- */
-inline TBNModel load_model_from_buffer(const void* data, size_t size) {
-    return load_onnx_model_from_buffer(data, size);
-}
-
-/**
- * @brief Get version information
- *
- * @return Version string
- */
-inline const char* get_version() {
-    return "0.1.0";
-}
+// Forward declare the main API functions - implementations are in model.hpp
+TBNModel load_model(const std::string& path);
+TBNModel load_model_from_buffer(const void* data, size_t size);
+const char* get_version();
 
 /**
  * @brief Create an inference session from a model

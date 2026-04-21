@@ -82,4 +82,7 @@ Tensor gemm_tuned(const Tensor& A, const Tensor& B, const Tensor* C = nullptr,
 // Auto-tuning - find best parameters for given sizes
 GemmParams auto_tune_gemm(int64_t M, int64_t N, int64_t K);
 
+// Helper function to convert shape to string
+std::string shape_to_string(const Shape& shape);
+
 } // namespace tbn

@@ -368,7 +368,7 @@ Tensor gemm_tuned(const Tensor& A, const Tensor& B, const Tensor* C,
 }
 
 // Helper function
-static std::string shape_to_string(const Shape& shape) {
+std::string shape_to_string(const Shape& shape) {
     std::string result = "[";
     for (size_t i = 0; i < shape.dims.size(); ++i) {
         if (i > 0) result += ", ";

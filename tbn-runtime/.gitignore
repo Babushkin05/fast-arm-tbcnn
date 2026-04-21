@@ -1,0 +1,77 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# Local development files
+.local/
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.test
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CTestTestfile.cmake
+_deps/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+
+# Test outputs
+test_results/
+*.log
+*.prof
+
+# Binary files in root
+test_*
+simple_example
+example_*
+
+# Keep necessary files
+!.gitkeep
+!CMakeLists.txt

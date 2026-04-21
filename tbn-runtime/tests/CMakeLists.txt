@@ -28,7 +28,17 @@ add_executable(tbn_simple_test
     test_basic.cpp
 )
 
+# Create separate test for quantized operators
+add_executable(test_quantized_operators
+    test_quantized_operators.cpp
+)
+
 target_link_libraries(tbn_simple_test
+    PRIVATE
+    tbn
+)
+
+target_link_libraries(test_quantized_operators
     PRIVATE
     tbn
 )
@@ -38,10 +48,15 @@ set_target_properties(tbn_simple_test PROPERTIES
     EXCLUDE_FROM_ALL TRUE
 )
 
+set_target_properties(test_quantized_operators PROPERTIES
+    EXCLUDE_FROM_ALL TRUE
+)
+
 # Add custom target for running tests
 add_custom_target(run_tests
     COMMAND tbn_simple_test
-    DEPENDS tbn_simple_test
+    COMMAND test_quantized_operators
+    DEPENDS tbn_simple_test test_quantized_operators
     COMMENT "Running TBN Runtime tests"
 )
 

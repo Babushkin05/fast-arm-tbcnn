@@ -31,6 +31,8 @@ namespace tbn {
 
 #include "operators/conv2d.hpp"
 #include "operators/gemm.hpp"
+#include "operators/quantized_conv2d.hpp"
+#include "operators/quantized_gemm.hpp"
 
 #include "memory/packed_weights.hpp"
 

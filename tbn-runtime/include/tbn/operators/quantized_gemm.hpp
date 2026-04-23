@@ -43,6 +43,15 @@ Tensor qlinear_matmul_binary(const Tensor& a,
                             const Tensor& b_binary,
                             float b_scale);
 
+// Quantize any tensor to binary weights
+// Used when loading ONNX models with non-binary weights
+Tensor quantize_to_binary(const Tensor& weights, float threshold = 0.0f);
+
+// Quantize any tensor to ternary weights
+Tensor quantize_to_ternary(const Tensor& weights,
+                          float threshold_low = -0.1f,
+                          float threshold_high = 0.1f);
+
 // Per-channel quantization support
 Tensor qlinear_matmul_per_channel(const Tensor& a,
                                  const std::vector<float>& a_scales,

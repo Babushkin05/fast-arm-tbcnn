@@ -68,3 +68,31 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/simple_performance.cpp")
         )
     endif()
 endif()
+
+# Add quantized GEMM benchmark
+add_executable(benchmark_quantized_gemm
+    benchmark_quantized_gemm.cpp
+)
+
+target_link_libraries(benchmark_quantized_gemm
+    PRIVATE
+    tbn
+)
+
+set_target_properties(benchmark_quantized_gemm PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# Add simple NEON test
+add_executable(simple_neon_test
+    simple_neon_test.cpp
+)
+
+target_link_libraries(simple_neon_test
+    PRIVATE
+    tbn
+)
+
+set_target_properties(simple_neon_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)

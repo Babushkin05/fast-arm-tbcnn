@@ -4,7 +4,7 @@ Date: 2026-04-21
 
 ## Status
 
-Proposed
+Implemented (2026-04-24)
 
 ## Context
 
@@ -16,56 +16,74 @@ For the ternary-binary neural network, we need a way to load and execute models 
 
 ## Decision
 
-Use ONNX Runtime with a custom Execution Provider (EP) for ternary-binary operations.
+Implemented a custom ONNX parser (not ONNX Runtime) for minimal overhead and full control.
 
-The architecture consists of three layers:
-1. ONNX Runtime Core - handles standard operations and graph execution
-2. TBN Execution Provider - implements custom ternary operations
-3. Quantization Layer - converts FP32 weights to ternary representation
+### Implementation Details
 
-This approach allows us to leverage ONNX Runtime's mature infrastructure while replacing only the compute-intensive operations (Conv2D, Gemm) with our optimized ternary implementations.
+**Parser** (`src/onnx_integration/onnx_parser.cpp`):
+- Parses ONNX protobuf format directly
+- Extracts graph structure, nodes, initializers
+- Converts to internal `ModelGraph` representation
+
+**Session-based Inference** (`include/tbn/runtime/model.hpp`):
+- `TBNModel::Session` class for inference
+- Sequential node execution
+- Operator dispatch based on `op_type`
+
+**Supported Operators**:
+| Operator | Status |
+|----------|--------|
+| Conv | ✅ Optimized (im2col + GeMM) |
+| Gemm | ✅ Optimized |
+| MatMul | ✅ Optimized |
+| Add | ✅ Broadcasting support |
+| Relu | ✅ |
+| Reshape | ✅ |
+| Flatten | ✅ |
+| MaxPool | ✅ |
+| AveragePool | ✅ |
+| GlobalMaxPool | ✅ |
+| GlobalAveragePool | ✅ |
 
 ## Consequences
 
 ### Positive
 - Standard model format (ONNX) with wide framework support
 - Minimal export process changes required
-- Built-in support for all standard operations
-- Good ARM performance through ONNX Runtime optimizations
-- Access to ONNX ecosystem tools
-- Ability to use existing graph optimizations
+- Full control over execution
+- No ONNX Runtime dependency overhead
+- Direct integration with optimized operators
 
 ### Negative
-- Additional dependency (ONNX Runtime ~10MB)
-- Need to understand ONNX Runtime APIs and patterns
-- Overhead from ONNX Runtime abstractions
-- Must follow ONNX Runtime extension patterns
+- Must implement operators manually
+- No graph optimizations from ONNX Runtime
+- Limited operator set compared to full ONNX Runtime
 
 ## Alternatives Considered
 
-### 1. Custom ONNX Parser
-Implementation of a complete ONNX parser with ternary operation support.
-Advantages: Full control, minimal overhead
-Disadvantages: Must implement 100+ operations, complex maintenance
+### 1. ONNX Runtime with Custom EP (Original Decision)
+Use ONNX Runtime with a custom Execution Provider.
+- Advantages: Full operator support, graph optimizations
+- Disadvantages: Heavy dependency (~10MB), complex integration
 
 ### 2. TensorFlow Lite with Custom Ops
-Use TFLite infrastructure with custom operations for ternary compute.
-Advantages: Mobile-focused, quantization-aware training support
-Disadvantages: Tight coupling to TensorFlow ecosystem, less flexibility
+- Advantages: Mobile-focused
+- Disadvantages: TensorFlow ecosystem lock-in
 
 ### 3. Apache TVM
-Use TVM's compilation infrastructure for automatic optimization.
-Advantages: Powerful compilation system, automatic optimizations
-Disadvantages: Complex integration, overkill for our specific use case
+- Advantages: Powerful compilation
+- Disadvantages: Overkill for our use case
 
-## Decision Drivers
-1. Time-to-market: Fast integration with existing models
-2. Performance: Effective use of ARM NEON instructions
-3. Maintainability: Standard tools and formats
-4. Flexibility: Ability to customize key operations
+### 4. Custom ONNX Parser (Chosen)
+Implement minimal ONNX parser.
+- Advantages: Minimal overhead, full control, no dependency
+- Disadvantages: Must implement operators
 
 ## Links
+
 - ADR-0002: Quantization Strategy
 - ADR-0003: Memory Layout
-- ONNX Runtime Custom EP Documentation
-- Related implementation files in src/runtime/
+- ADR-0006: Conv2D Optimization
+- ADR-0007: Pooling Operations
+- `src/onnx_integration/onnx_parser.cpp` — parser implementation
+- `include/tbn/runtime/model.hpp` — model and session

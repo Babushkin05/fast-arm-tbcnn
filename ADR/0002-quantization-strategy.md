@@ -4,7 +4,7 @@ Date: 2026-04-21
 
 ## Status
 
-Proposed
+Implemented (2026-04-24)
 
 ## Context
 
@@ -16,73 +16,81 @@ We need to determine how and when to convert FP32 model weights to ternary value
 
 ## Decision
 
-Use a hybrid approach: Offline weight quantization + Runtime activation quantization.
+Implemented runtime quantization with on-the-fly conversion:
 
-Weight Storage Format:
-- Weights are quantized offline during model loading
-- 2 bits per weight: 00=0, 01=+1, 10=-1, 11=reserved
-- Per-channel scaling factors for better accuracy
-- Optional per-channel zero points for int8 activations
+### Weight Quantization
+- **Float → Binary**: `quantize_to_binary(tensor, threshold=0.0f)`
+- **Float → Ternary**: `quantize_to_ternary(tensor, threshold_low, threshold_high)`
+- Automatic quantization in `execute_conv()` when float weights detected
 
-Quantization Strategy:
-- Ternary: Weights with absolute value below threshold become 0
-- Binary: Optional mode for specific layers
-- Sparse ternary: Enforced sparsity for compression
-- Activations: Optional runtime quantization to INT8
+### Activation Quantization
+- On-the-fly quantization to ternary during GeMM computation
+- Thresholds: `threshold_low=-0.1f`, `threshold_high=0.1f`
+- No permanent storage of quantized activations
+
+### Binary Encoding
+- `BINARY_ZERO = 0` → represents -1
+- `BINARY_ONE = 1` → represents +1
+- Stored as `uint8_t` (8 values per byte conceptually, 1 byte used)
 
 ## Consequences
 
 ### Positive
-- Offline weight quantization enables fast inference startup with no overhead
-- Per-channel scaling provides better quantization accuracy
-- Flexibility to change strategy without model retraining
-- Compatibility with existing ONNX models
-- Runtime activation quantization provides memory optimization options
+- Any ONNX model works without modification
+- No preprocessing step required
+- Runtime flexibility
+- **23x speedup** for GeMM with binary weights
 
 ### Negative
-- Increased loading time to quantize all weights
-- Additional memory for both FP32 and ternary weights
-- Added complexity for debugging with two weight representations
-- Runtime overhead if activation quantization is enabled
+- Quantization overhead on first inference
+- Could benefit from caching quantized weights
+- Accuracy loss from weight quantization (acceptable for inference)
+
+## Performance Results
+
+### GeMM Speedup (Float × Binary)
+| Size | Float × Binary | Regular GEMM | Speedup |
+|------|---------------|--------------|---------|
+| 128×128 | 880 μs | 4.1 ms | **4.6x** |
+| 256×256 | 3.9 ms | 31.0 ms | **8.0x** |
+| 512×512 | 22.8 ms | 371.6 ms | **16.3x** |
+| 1024×1024 | 133 ms | 3045 ms | **22.9x** |
+
+### Conv2D Speedup (with im2col + GeMM)
+| Layer | Naive | Optimized | Speedup |
+|-------|-------|-----------|---------|
+| 64×14×14 → 128×14×14 | 10425 μs | 577 μs | **18x** |
+
+## Implementation Details
+
+**Files:**
+- `src/operators/quantized_gemm_neon.cpp` — `qlinear_matmul_binary()`, `quantize_to_binary()`
+- `src/operators/quantized_gemm.cpp` — fallback implementations
+- `include/tbn/operators/quantized_gemm.hpp` — API
+
+**Key Functions:**
+```cpp
+Tensor quantize_to_binary(const Tensor& weights, float threshold = 0.0f);
+Tensor quantize_to_ternary(const Tensor& weights, float low = -0.1f, float high = 0.1f);
+Tensor qlinear_matmul_binary(const Tensor& a, const Tensor& b_binary, float scale);
+```
 
 ## Alternatives Considered
 
 ### 1. Pure Offline Quantization
-Quantize everything in advance and save as a custom .tbn model format.
-Advantages: Maximum loading speed
-Disadvantages: Requires separate converter, no backward compatibility
+Quantize in advance and save as custom format.
+- Advantages: Fast loading
+- Disadvantages: Requires converter tool
 
-### 2. Pure Runtime Quantization
-Perform all quantization on first inference execution.
-Advantages: Simple implementation
-Disadvantages: Very slow first run, no caching benefits
-
-### 3. Training-Aware Quantization
-Train models with ternary constraints using straight-through estimators.
-Advantages: Best accuracy (0.1-0.2% loss)
-Disadvantages: Requires model retraining, complex integration
-
-## Decision Drivers
-1. Quality: Less than 1% accuracy loss compared to FP32
-2. Performance: Minimal overhead at inference time
-3. Flexibility: Support for different strategies without retraining
-4. Compatibility: Work with existing ONNX models
+### 2. Training-Aware Quantization
+Train with ternary constraints.
+- Advantages: Best accuracy
+- Disadvantages: Requires retraining
 
 ## Links
-- ADR-0001: ONNX Runtime Integration
+
+- ADR-0001: ONNX Integration
 - ADR-0003: Memory Layout
-- Research paper on ternary neural networks
-- Implementation files in src/quantization/
-
-## Future Considerations
-- Adaptive threshold selection based on weight distribution
-- Mixed-precision with some layers remaining FP32
-- Progressive quantization for very deep models
-- Dynamic range calibration for activation quantization
-
-## Testing Strategy
-Verify accuracy loss on standard benchmarks (ImageNet, CIFAR-10) remains below 1% for typical CNN architectures including ResNet50, MobileNet, and EfficientNet. Measure quantization time and memory overhead during model loading.
-
-## Decision
-
-Accepted - The hybrid approach provides optimal balance between quality, performance, and flexibility. Offline weight quantization enables fast startup while per-channel scaling preserves accuracy. Runtime activation quantization is optional for additional memory optimization. Implementation follows this specification with measured 0.6% accuracy loss on ImageNet, meeting requirements. Testing covers major CNN architectures with consistent results across different quantization strategies. Format is stable and ready for ONNX Runtime integration. Any changes require new ADR for strategy modification. Further improvements tracked in quantization optimization roadmap. Additional metrics available in benchmarks documentation. Next step: memory layout optimization (see ADR-0003).
+- ADR-0006: Conv2D Optimization
+- `src/operators/quantized_gemm_neon.cpp` — implementation
+- `GeMM/05-final/GeMM.hpp` — blocked GeMM algorithm

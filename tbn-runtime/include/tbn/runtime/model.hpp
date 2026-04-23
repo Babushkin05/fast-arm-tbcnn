@@ -5,6 +5,7 @@
 #include "../utils/errors.hpp"
 #include "../utils/logging.hpp"
 #include "../operators/gemm.hpp"
+#include "../operators/conv2d.hpp"
 #include <memory>
 #include <unordered_map>
 #include <string>
@@ -201,16 +202,85 @@ public:
         }
 
         void execute_conv(const ModelNode& node) {
-            // Placeholder - would call tbn::Conv2D operator
-            TBN_LOG_WARNING("Conv operator execution not fully implemented");
+            // ONNX Conv: Y = Conv(X, W, B)
+            // X: input [N, C, H, W]
+            // W: weights [M, C/group, kH, kW]
+            // B: optional bias [M]
+            TBN_CHECK(node.inputs.size() >= 2, InvalidArgumentError, "Conv expects at least 2 inputs");
+            TBN_CHECK(node.outputs.size() == 1, InvalidArgumentError, "Conv expects 1 output");
 
-            // For now, just create a dummy output tensor
-            for (const auto& output_name : node.outputs) {
-                auto it = graph_->value_info.find(output_name);
-                if (it != graph_->value_info.end()) {
-                    intermediate_tensors_[output_name] = Tensor(it->second, DataType::FLOAT32);
+            const auto& X_name = node.inputs[0];
+            const auto& W_name = node.inputs[1];
+
+            auto it_X = intermediate_tensors_.find(X_name);
+            auto it_W = intermediate_tensors_.find(W_name);
+            TBN_CHECK(it_X != intermediate_tensors_.end(), RuntimeError, "Conv input X not found");
+            TBN_CHECK(it_W != intermediate_tensors_.end(), RuntimeError, "Conv weights W not found");
+
+            const Tensor& X = it_X->second;
+            const Tensor& W = it_W->second;
+
+            // Extract Conv2DParams from ONNX attributes
+            Conv2DParams params;
+
+            // Get kernel_shape from weights if not in attributes
+            params.kernel_h = W.shape().dims[2];
+            params.kernel_w = W.shape().dims[3];
+
+            // Extract attributes
+            auto attr_it = node.attributes.find("strides");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& strides = attr_it->second.as_ints();
+                if (strides.size() >= 2) {
+                    params.stride_h = strides[0];
+                    params.stride_w = strides[1];
                 }
             }
+
+            attr_it = node.attributes.find("pads");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& pads = attr_it->second.as_ints();
+                if (pads.size() >= 4) {
+                    // ONNX pads: [begin_h, begin_w, end_h, end_w]
+                    // We assume symmetric padding for now
+                    params.pad_h = pads[0];
+                    params.pad_w = pads[1];
+                }
+            }
+
+            attr_it = node.attributes.find("dilations");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& dilations = attr_it->second.as_ints();
+                if (dilations.size() >= 2) {
+                    params.dilation_h = dilations[0];
+                    params.dilation_w = dilations[1];
+                }
+            }
+
+            attr_it = node.attributes.find("group");
+            if (attr_it != node.attributes.end() && attr_it->second.is_int()) {
+                params.groups = attr_it->second.as_int();
+            }
+
+            // Optional bias
+            const Tensor* B = nullptr;
+            if (node.inputs.size() >= 3) {
+                const auto& B_name = node.inputs[2];
+                auto it_B = intermediate_tensors_.find(B_name);
+                if (it_B != intermediate_tensors_.end()) {
+                    B = &it_B->second;
+                }
+            }
+
+            // Execute convolution
+            Tensor result;
+            if (params.groups == 1) {
+                result = conv2d(X, W, B, params);
+            } else {
+                result = conv2d_grouped(X, W, B, params.groups, params);
+            }
+
+            intermediate_tensors_[node.outputs[0]] = result;
         }
 
         void execute_gemm(const ModelNode& node) {

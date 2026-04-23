@@ -259,12 +259,9 @@ private:
             const int32_t* src_data = tensor_proto.int32_data().data();
             std::memcpy(tensor.data(), src_data, tensor_proto.int32_data_size() * sizeof(int32_t));
         } else if (tensor_proto.int64_data_size() > 0) {
-            // Int64 data - convert to int32 for now
-            std::vector<int32_t> int32_data;
-            for (int i = 0; i < tensor_proto.int64_data_size(); ++i) {
-                int32_data.push_back(static_cast<int32_t>(tensor_proto.int64_data(i)));
-            }
-            std::memcpy(tensor.data(), int32_data.data(), int32_data.size() * sizeof(int32_t));
+            // Int64 data
+            const int64_t* src_data = tensor_proto.int64_data().data();
+            std::memcpy(tensor.data(), src_data, tensor_proto.int64_data_size() * sizeof(int64_t));
         }
 
         return tensor;

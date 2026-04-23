@@ -84,14 +84,19 @@ private:
         size_t element_size = 0;
         switch (dtype_) {
             case DataType::FLOAT32: element_size = 4; break;
+            case DataType::FLOAT16:
+            case DataType::BFLOAT16: element_size = 2; break;
             case DataType::INT8:
             case DataType::UINT8:
             case DataType::TERNARY:
-            case DataType::BINARY: element_size = 1; break;
+            case DataType::BINARY:
+            case DataType::BOOL: element_size = 1; break;
             case DataType::INT16:
             case DataType::UINT16: element_size = 2; break;
             case DataType::INT32:
             case DataType::UINT32: element_size = 4; break;
+            case DataType::INT64:
+            case DataType::UINT64: element_size = 8; break;
             default:
                 throw InvalidArgumentError("Unknown data type");
         }

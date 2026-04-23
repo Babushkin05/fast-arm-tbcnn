@@ -11,7 +11,7 @@ GeMM/_deps
 tbn-runtime/build
 
 # Python virtual environments
-.venv
-venv/
-__pycache__/
+*.venv*
+*venv/*
+*__pycache__/*
 *.pyc

@@ -144,6 +144,7 @@ namespace impl {
         const float* A_data = A.typed_data<float>();
         const float* B_data = B.typed_data<float>();
         const float* C_data = C ? C->typed_data<float>() : nullptr;
+        bool C_is_1d = C && C->shape().dims.size() == 1;
 
         int64_t M = transA ? A.shape().dims[1] : A.shape().dims[0];
         int64_t K = transA ? A.shape().dims[0] : A.shape().dims[1];
@@ -154,8 +155,17 @@ namespace impl {
 
         // Initialize result
         if (C_data && beta != 0.0f) {
-            for (int64_t i = 0; i < M * N; ++i) {
-                result_data[i] = beta * C_data[i];
+            if (C_is_1d) {
+                // Broadcast 1D bias to each row
+                for (int64_t i = 0; i < M; ++i) {
+                    for (int64_t j = 0; j < N; ++j) {
+                        result_data[i * N + j] = beta * C_data[j];
+                    }
+                }
+            } else {
+                for (int64_t i = 0; i < M * N; ++i) {
+                    result_data[i] = beta * C_data[i];
+                }
             }
         } else {
             std::memset(result_data, 0, M * N * sizeof(float));
@@ -219,11 +229,18 @@ Tensor gemm(const Tensor& A, const Tensor& B, const Tensor* C,
               "Matrix dimensions incompatible for multiplication");
 
     if (C) {
-        TBN_CHECK(C->shape().dims.size() == 2, InvalidShapeError,
-                  "C must be 2D tensor");
-        TBN_CHECK(C->shape().dims[0] == M && C->shape().dims[1] == N,
-                  InvalidShapeError,
-                  "C shape must match output shape");
+        // ONNX allows 1D bias (broadcast to each row) or 2D bias
+        if (C->shape().dims.size() == 1) {
+            TBN_CHECK(C->shape().dims[0] == N, InvalidShapeError,
+                      "1D bias C must have size N");
+        } else if (C->shape().dims.size() == 2) {
+            TBN_CHECK(C->shape().dims[0] == M && C->shape().dims[1] == N,
+                      InvalidShapeError,
+                      "2D C shape must match output shape");
+        } else {
+            TBN_CHECK(false, InvalidShapeError,
+                      "C must be 1D or 2D tensor");
+        }
     }
 
     // Use blocked implementation for better cache performance

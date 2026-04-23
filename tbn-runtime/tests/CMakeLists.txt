@@ -33,6 +33,11 @@ add_executable(test_quantized_operators
     test_quantized_operators.cpp
 )
 
+# Create test for optimized Conv2D
+add_executable(test_conv2d_optimized
+    test_conv2d_optimized.cpp
+)
+
 target_link_libraries(tbn_simple_test
     PRIVATE
     tbn
@@ -43,12 +48,21 @@ target_link_libraries(test_quantized_operators
     tbn
 )
 
+target_link_libraries(test_conv2d_optimized
+    PRIVATE
+    tbn
+)
+
 # Set test properties
 set_target_properties(tbn_simple_test PROPERTIES
     EXCLUDE_FROM_ALL TRUE
 )
 
 set_target_properties(test_quantized_operators PROPERTIES
+    EXCLUDE_FROM_ALL TRUE
+)
+
+set_target_properties(test_conv2d_optimized PROPERTIES
     EXCLUDE_FROM_ALL TRUE
 )
 

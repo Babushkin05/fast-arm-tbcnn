@@ -1,9 +1,63 @@
 #include "tbn/operators/conv2d.hpp"
 #include "tbn/operators/gemm.hpp"
+#include "tbn/operators/quantized_gemm.hpp"
 #include <cstring>
 #include <algorithm>
 
 namespace tbn {
+
+namespace {
+
+// Reshape 4D weights [M, C, kH, kW] to 2D [M, C*kH*kW] (for float weights)
+Tensor reshape_weights_to_2d(const Tensor& weights) {
+    int64_t M = weights.shape().dims[0];
+    int64_t C = weights.shape().dims[1];
+    int64_t kH = weights.shape().dims[2];
+    int64_t kW = weights.shape().dims[3];
+    int64_t K = C * kH * kW;
+
+    Shape shape_2d{M, K};
+    Tensor reshaped(shape_2d, weights.dtype());
+
+    // Just copy data - it's already in row-major order
+    std::memcpy(reshaped.data(), weights.data(),
+                weights.num_elements() * sizeof(float));
+
+    return reshaped;
+}
+
+// Reshape 4D binary weights [M, C, kH, kW] to 2D [M, C*kH*kW] (for binary weights)
+Tensor reshape_binary_weights_to_2d(const Tensor& weights) {
+    int64_t M = weights.shape().dims[0];
+    int64_t C = weights.shape().dims[1];
+    int64_t kH = weights.shape().dims[2];
+    int64_t kW = weights.shape().dims[3];
+    int64_t K = C * kH * kW;
+
+    Shape shape_2d{M, K};
+    Tensor reshaped(shape_2d, DataType::BINARY);
+
+    // Just copy data - it's already in row-major order
+    std::memcpy(reshaped.data(), weights.data(),
+                weights.num_elements() * sizeof(BinaryWeight));
+
+    return reshaped;
+}
+
+// Reshape output from [N*out_h*out_w, M] to [N, M, out_h, out_w]
+Tensor reshape_output_to_4d(const Tensor& output_2d, int64_t N, int64_t M,
+                            int64_t out_h, int64_t out_w) {
+    Shape shape_4d{N, M, out_h, out_w};
+    Tensor output(shape_4d, DataType::FLOAT32);
+
+    // Data is already in correct order, just reshape
+    std::memcpy(output.data(), output_2d.data(),
+                output_2d.num_elements() * sizeof(float));
+
+    return output;
+}
+
+} // anonymous namespace
 
 // Standard Conv2D - naive implementation with support for stride, padding, dilation
 Tensor conv2d(const Tensor& input, const Tensor& weights, const Tensor* bias,
@@ -125,50 +179,125 @@ Tensor conv2d(const Tensor& input, const Tensor& weights, const Tensor* bias,
 // Ternary Conv2D - optimized for ternary weights
 Tensor conv2d_ternary(const Tensor& input, const Tensor& ternary_weights,
                       const Tensor* bias, const Conv2DParams& params) {
-    // For now, use standard conv2d with unpacked weights
-    // TODO: Implement optimized version with packed weights
-    TBN_LOG_WARNING("conv2d_ternary: using standard implementation (not optimized)");
+    TBN_LOG_INFO("conv2d_ternary: converting ternary to binary for optimized path");
 
     TBN_CHECK(ternary_weights.dtype() == DataType::TERNARY, InvalidArgumentError,
               "Ternary Conv2D requires ternary weights");
 
-    // Convert ternary weights to float for now
-    // In production, would use packed weight access
-    const auto& tw = ternary_weights;
-    Shape float_shape = tw.shape();
-    Tensor float_weights(float_shape, DataType::FLOAT32);
+    // Convert ternary to binary: {-1, 0, +1} -> {-1, +1}
+    // Zero values are mapped to +1 (or -1, doesn't matter much for inference)
+    Shape binary_shape = ternary_weights.shape();
+    Tensor binary_weights(binary_shape, DataType::BINARY);
 
-    const int8_t* tw_data = tw.typed_data<int8_t>();
-    float* fw_data = float_weights.typed_data<float>();
+    const int8_t* tw_data = ternary_weights.typed_data<int8_t>();
+    BinaryWeight* bw_data = binary_weights.typed_data<BinaryWeight>();
 
-    for (int64_t i = 0; i < tw.num_elements(); ++i) {
-        fw_data[i] = static_cast<float>(tw_data[i]);  // -1, 0, +1
+    for (int64_t i = 0; i < ternary_weights.num_elements(); ++i) {
+        // Map: -1 -> BINARY_ZERO (0), 0 or +1 -> BINARY_ONE (1)
+        // This preserves the sign: negative weights stay negative in binary
+        bw_data[i] = (tw_data[i] < 0) ? BINARY_ZERO : BINARY_ONE;
     }
 
-    return conv2d(input, float_weights, bias, params);
+    return conv2d_binary(input, binary_weights, bias, params);
 }
 
 // Binary Conv2D - optimized for binary weights
 Tensor conv2d_binary(const Tensor& input, const Tensor& binary_weights,
                      const Tensor* bias, const Conv2DParams& params) {
-    // For now, use standard conv2d with unpacked weights
-    // TODO: Implement optimized version with packed weights
-    TBN_LOG_WARNING("conv2d_binary: using standard implementation (not optimized)");
-
+    // Validate inputs
+    TBN_CHECK(input.shape().dims.size() == 4, InvalidShapeError,
+              "Conv2D input must be 4D (NCHW)");
+    TBN_CHECK(binary_weights.shape().dims.size() == 4, InvalidShapeError,
+              "Conv2D weights must be 4D (MCHW)");
+    TBN_CHECK(input.dtype() == DataType::FLOAT32, InvalidArgumentError,
+              "Conv2D requires float32 input");
     TBN_CHECK(binary_weights.dtype() == DataType::BINARY, InvalidArgumentError,
               "Binary Conv2D requires binary weights");
 
-    // Convert binary weights to float for now
-    const uint8_t* bw_data = binary_weights.typed_data<uint8_t>();
-    Shape float_shape = binary_weights.shape();
-    Tensor float_weights(float_shape, DataType::FLOAT32);
-    float* fw_data = float_weights.typed_data<float>();
+    // Input dimensions (NCHW)
+    int64_t N = input.shape().dims[0];
+    int64_t C = input.shape().dims[1];
+    int64_t H = input.shape().dims[2];
+    int64_t W = input.shape().dims[3];
 
-    for (int64_t i = 0; i < binary_weights.num_elements(); ++i) {
-        fw_data[i] = (bw_data[i] == 0) ? -1.0f : 1.0f;
+    // Weight dimensions
+    int64_t M = binary_weights.shape().dims[0];
+    int64_t C_w = binary_weights.shape().dims[1];
+    int64_t kH = binary_weights.shape().dims[2];
+    int64_t kW = binary_weights.shape().dims[3];
+
+    // Validate
+    TBN_CHECK(C == C_w, InvalidShapeError,
+              "Input channels must match weight channels");
+
+    // Calculate output dimensions
+    int64_t out_h = (H + 2 * params.pad_h - params.dilation_h * (kH - 1) - 1) /
+                     params.stride_h + 1;
+    int64_t out_w = (W + 2 * params.pad_w - params.dilation_w * (kW - 1) - 1) /
+                     params.stride_w + 1;
+
+    // Step 1: im2col - transform input to column matrix
+    // [N, C, H, W] -> [N*out_h*out_w, C*kH*kW]
+    Tensor col = impl::im2col(input, kH, kW,
+                              params.stride_h, params.stride_w,
+                              params.pad_h, params.pad_w,
+                              params.dilation_h, params.dilation_w);
+
+    // Step 2: Reshape weights from [M, C, kH, kW] to [M, C*kH*kW]
+    Tensor weights_2d = reshape_binary_weights_to_2d(binary_weights);
+
+    // Step 3: Optimized matrix multiplication using GeMM
+    // col: [N*out_h*out_w, C*kH*kW] (float)
+    // weights: [M, C*kH*kW] (binary)
+    // Need to transpose weights for multiplication: col @ weights^T
+    // But qlinear_matmul_binary expects A[M,K] @ B[K,N]
+    // So we need: col[N*out, K] @ weights[K, M] = output[N*out, M]
+
+    // Transpose weights: [M, K] -> [K, M]
+    int64_t K = C * kH * kW;
+    Shape weights_T_shape{K, M};
+    Tensor weights_T(weights_T_shape, DataType::BINARY);
+
+    const BinaryWeight* w_data = binary_weights.typed_data<BinaryWeight>();
+    BinaryWeight* wT_data = weights_T.typed_data<BinaryWeight>();
+
+    for (int64_t m = 0; m < M; ++m) {
+        for (int64_t k = 0; k < K; ++k) {
+            wT_data[k * M + m] = w_data[m * K + k];
+        }
     }
 
-    return conv2d(input, float_weights, bias, params);
+    // Now: col [N*out, K] @ weights_T [K, M] = output [N*out, M]
+    Tensor result_2d = qlinear_matmul_binary(col, weights_T, 1.0f);
+
+    // Step 4: Reshape output to [N, M, out_h, out_w]
+    Tensor output = reshape_output_to_4d(result_2d, N, M, out_h, out_w);
+
+    // Step 5: Add bias
+    if (bias) {
+        TBN_CHECK(bias->shape().dims.size() == 1, InvalidShapeError,
+                  "Bias must be 1D");
+        TBN_CHECK(bias->shape().dims[0] == M, InvalidShapeError,
+                  "Bias size must match output channels");
+        const float* bias_data = bias->typed_data<float>();
+        float* output_data = output.typed_data<float>();
+
+        for (int64_t n = 0; n < N; ++n) {
+            for (int64_t m = 0; m < M; ++m) {
+                for (int64_t oh = 0; oh < out_h; ++oh) {
+                    for (int64_t ow = 0; ow < out_w; ++ow) {
+                        int64_t idx = ((n * M + m) * out_h + oh) * out_w + ow;
+                        output_data[idx] += bias_data[m];
+                    }
+                }
+            }
+        }
+    }
+
+    TBN_LOG_INFO("Conv2D binary (optimized): " + shape_to_string(input.shape()) +
+                 " -> " + shape_to_string(output.shape()));
+
+    return output;
 }
 
 // Grouped convolution

@@ -9,3 +9,9 @@ GeMM/_deps
 .local
 
 tbn-runtime/build
+
+# Python virtual environments
+.venv
+venv/
+__pycache__/
+*.pyc

@@ -4,6 +4,7 @@
 #include "tbn/runtime/types.hpp"
 #include "tbn/runtime/tensor.hpp"
 #include "tbn/runtime/model.hpp"
+#include "tbn/runtime/attribute.hpp"
 
 // Standard headers
 #include <cstdint>
@@ -290,11 +291,57 @@ private:
 
         // Convert attributes
         for (const auto& attr : onnx_node.attribute()) {
-            if (attr.type() == onnx::AttributeProto::TENSOR) {
-                Tensor attr_tensor = convert_tensor(attr.t());
-                node.attributes[attr.name()] = attr_tensor;
+            const std::string& attr_name = attr.name();
+
+            switch (attr.type()) {
+                case onnx::AttributeProto::INT:
+                    node.attributes[attr_name] = AttributeValue(attr.i());
+                    break;
+
+                case onnx::AttributeProto::FLOAT:
+                    node.attributes[attr_name] = AttributeValue(attr.f());
+                    break;
+
+                case onnx::AttributeProto::STRING:
+                    node.attributes[attr_name] = AttributeValue(attr.s());
+                    break;
+
+                case onnx::AttributeProto::TENSOR:
+                    node.attributes[attr_name] = AttributeValue(convert_tensor(attr.t()));
+                    break;
+
+                case onnx::AttributeProto::INTS: {
+                    std::vector<int64_t> ints;
+                    for (int i = 0; i < attr.ints_size(); ++i) {
+                        ints.push_back(attr.ints(i));
+                    }
+                    node.attributes[attr_name] = AttributeValue(ints);
+                    break;
+                }
+
+                case onnx::AttributeProto::FLOATS: {
+                    std::vector<float> floats;
+                    for (int i = 0; i < attr.floats_size(); ++i) {
+                        floats.push_back(attr.floats(i));
+                    }
+                    node.attributes[attr_name] = AttributeValue(floats);
+                    break;
+                }
+
+                case onnx::AttributeProto::STRINGS: {
+                    std::vector<std::string> strings;
+                    for (int i = 0; i < attr.strings_size(); ++i) {
+                        strings.push_back(attr.strings(i));
+                    }
+                    node.attributes[attr_name] = AttributeValue(strings);
+                    break;
+                }
+
+                default:
+                    TBN_LOG_WARNING("Unsupported attribute type: " + std::to_string(attr.type()) +
+                                   " for attribute '" + attr_name + "'");
+                    break;
             }
-            // Handle other attribute types as needed
         }
 
         return node;
@@ -324,6 +371,29 @@ std::string OnnxParser::get_producer_name() const {
 
 std::string OnnxParser::get_producer_version() const {
     return impl_->get_producer_version();
+}
+
+// Convenience functions implementation
+TBNModel load_onnx_model(const std::string& path) {
+    OnnxParser parser;
+    parser.parse_from_file(path);
+
+    auto graph = parser.get_graph();
+    TBNModel model(graph);
+    model.set_producer(parser.get_producer_name(), parser.get_producer_version());
+
+    return model;
+}
+
+TBNModel load_onnx_model_from_buffer(const void* data, size_t size) {
+    OnnxParser parser;
+    parser.parse_from_buffer(data, size);
+
+    auto graph = parser.get_graph();
+    TBNModel model(graph);
+    model.set_producer(parser.get_producer_name(), parser.get_producer_version());
+
+    return model;
 }
 
 } // namespace tbn

@@ -14,6 +14,34 @@ set_target_properties(simple_example PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+# ONNX loading test
+add_executable(test_onnx_loading
+    test_onnx_loading.cpp
+)
+
+target_link_libraries(test_onnx_loading
+    PRIVATE
+    tbn
+)
+
+set_target_properties(test_onnx_loading PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# ONNX inference test
+add_executable(test_onnx_inference
+    test_onnx_inference.cpp
+)
+
+target_link_libraries(test_onnx_inference
+    PRIVATE
+    tbn
+)
+
+set_target_properties(test_onnx_inference PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 # Add more examples as they are created
 # add_executable(advanced_example
 #     advanced_example.cpp

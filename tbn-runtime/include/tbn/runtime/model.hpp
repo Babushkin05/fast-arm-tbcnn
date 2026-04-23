@@ -1,13 +1,16 @@
 #pragma once
 
 #include "tensor.hpp"
+#include "attribute.hpp"
 #include "../utils/errors.hpp"
 #include "../utils/logging.hpp"
+#include "../operators/gemm.hpp"
 #include <memory>
 #include <unordered_map>
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cstring>
 
 namespace tbn {
 
@@ -16,7 +19,7 @@ struct ModelNode {
     std::string op_type;
     std::vector<std::string> inputs;
     std::vector<std::string> outputs;
-    std::unordered_map<std::string, Tensor> attributes;
+    NodeAttributes attributes;  // Flexible attribute storage
 };
 
 struct ModelGraph {
@@ -177,13 +180,21 @@ public:
         void execute_node(const ModelNode& node) {
             TBN_LOG_INFO("Executing node: " + node.name + " (" + node.op_type + ")");
 
-            // This is a placeholder - actual implementation would delegate to operators
+            // Map ONNX operators to implementations
             if (node.op_type == "Conv") {
                 execute_conv(node);
             } else if (node.op_type == "Gemm") {
                 execute_gemm(node);
+            } else if (node.op_type == "MatMul") {
+                execute_matmul(node);
+            } else if (node.op_type == "Add") {
+                execute_add(node);
             } else if (node.op_type == "Relu") {
                 execute_relu(node);
+            } else if (node.op_type == "Reshape") {
+                execute_reshape(node);
+            } else if (node.op_type == "Flatten") {
+                execute_flatten(node);
             } else {
                 throw NotImplementedError("Operator '" + node.op_type + "' not implemented");
             }
@@ -203,16 +214,238 @@ public:
         }
 
         void execute_gemm(const ModelNode& node) {
-            // Placeholder - would call tbn::Gemm operator
-            TBN_LOG_WARNING("Gemm operator execution not fully implemented");
+            // ONNX Gemm: Y = alpha * A' * B' + beta * C
+            // A' = transA ? A^T : A
+            // B' = transB ? B^T : B
+            TBN_CHECK(node.inputs.size() >= 2, InvalidArgumentError, "Gemm expects at least 2 inputs");
+            TBN_CHECK(node.outputs.size() == 1, InvalidArgumentError, "Gemm expects 1 output");
 
-            // For now, just create a dummy output tensor
-            for (const auto& output_name : node.outputs) {
-                auto it = graph_->value_info.find(output_name);
-                if (it != graph_->value_info.end()) {
-                    intermediate_tensors_[output_name] = Tensor(it->second, DataType::FLOAT32);
+            const auto& A_name = node.inputs[0];
+            const auto& B_name = node.inputs[1];
+
+            auto it_A = intermediate_tensors_.find(A_name);
+            auto it_B = intermediate_tensors_.find(B_name);
+            TBN_CHECK(it_A != intermediate_tensors_.end(), RuntimeError, "Gemm input A not found");
+            TBN_CHECK(it_B != intermediate_tensors_.end(), RuntimeError, "Gemm input B not found");
+
+            const Tensor& A = it_A->second;
+            const Tensor& B = it_B->second;
+
+            // Get attributes with defaults
+            float alpha = 1.0f;
+            float beta = 1.0f;
+            bool transA = false;
+            bool transB = false;
+
+            auto attr_it = node.attributes.find("alpha");
+            if (attr_it != node.attributes.end() && attr_it->second.is_float()) {
+                alpha = attr_it->second.as_float();
+            }
+            attr_it = node.attributes.find("beta");
+            if (attr_it != node.attributes.end() && attr_it->second.is_float()) {
+                beta = attr_it->second.as_float();
+            }
+            attr_it = node.attributes.find("transA");
+            if (attr_it != node.attributes.end() && attr_it->second.is_int()) {
+                transA = attr_it->second.as_int() != 0;
+            }
+            attr_it = node.attributes.find("transB");
+            if (attr_it != node.attributes.end() && attr_it->second.is_int()) {
+                transB = attr_it->second.as_int() != 0;
+            }
+
+            // Optional bias C
+            const Tensor* C = nullptr;
+            if (node.inputs.size() >= 3) {
+                const auto& C_name = node.inputs[2];
+                auto it_C = intermediate_tensors_.find(C_name);
+                if (it_C != intermediate_tensors_.end()) {
+                    C = &it_C->second;
                 }
             }
+
+            // Call GEMM implementation
+            Tensor result = gemm(A, B, C, alpha, beta, transA, transB);
+            intermediate_tensors_[node.outputs[0]] = result;
+        }
+
+        void execute_matmul(const ModelNode& node) {
+            // ONNX MatMul: Y = A * B (no transposition, no alpha/beta)
+            TBN_CHECK(node.inputs.size() == 2, InvalidArgumentError, "MatMul expects 2 inputs");
+            TBN_CHECK(node.outputs.size() == 1, InvalidArgumentError, "MatMul expects 1 output");
+
+            const auto& A_name = node.inputs[0];
+            const auto& B_name = node.inputs[1];
+
+            auto it_A = intermediate_tensors_.find(A_name);
+            auto it_B = intermediate_tensors_.find(B_name);
+            TBN_CHECK(it_A != intermediate_tensors_.end(), RuntimeError, "MatMul input A not found");
+            TBN_CHECK(it_B != intermediate_tensors_.end(), RuntimeError, "MatMul input B not found");
+
+            const Tensor& A = it_A->second;
+            const Tensor& B = it_B->second;
+
+            // For 2D tensors, use GEMM
+            if (A.shape().dims.size() == 2 && B.shape().dims.size() == 2) {
+                Tensor result = gemm(A, B, nullptr, 1.0f, 0.0f, false, false);
+                intermediate_tensors_[node.outputs[0]] = result;
+            } else {
+                throw NotImplementedError("MatMul for non-2D tensors not implemented");
+            }
+        }
+
+        void execute_add(const ModelNode& node) {
+            // ONNX Add: Y = A + B (element-wise with broadcasting)
+            TBN_CHECK(node.inputs.size() == 2, InvalidArgumentError, "Add expects 2 inputs");
+            TBN_CHECK(node.outputs.size() == 1, InvalidArgumentError, "Add expects 1 output");
+
+            const auto& A_name = node.inputs[0];
+            const auto& B_name = node.inputs[1];
+
+            auto it_A = intermediate_tensors_.find(A_name);
+            auto it_B = intermediate_tensors_.find(B_name);
+            TBN_CHECK(it_A != intermediate_tensors_.end(), RuntimeError, "Add input A not found");
+            TBN_CHECK(it_B != intermediate_tensors_.end(), RuntimeError, "Add input B not found");
+
+            const Tensor& A = it_A->second;
+            const Tensor& B = it_B->second;
+
+            // Support simple broadcasting: 2D + 1D (bias case)
+            if (A.shape().dims.size() == 2 && B.shape().dims.size() == 1) {
+                // A is [M, N], B is [N] -> broadcast B across rows
+                int64_t M = A.shape().dims[0];
+                int64_t N = A.shape().dims[1];
+                TBN_CHECK(B.shape().dims[0] == N, InvalidShapeError,
+                          "Broadcasting: B size must match last dim of A");
+
+                Tensor output(A.shape(), A.dtype());
+                const float* A_data = A.typed_data<float>();
+                const float* B_data = B.typed_data<float>();
+                float* output_data = output.typed_data<float>();
+
+                for (int64_t i = 0; i < M; ++i) {
+                    for (int64_t j = 0; j < N; ++j) {
+                        output_data[i * N + j] = A_data[i * N + j] + B_data[j];
+                    }
+                }
+                intermediate_tensors_[node.outputs[0]] = output;
+                return;
+            }
+
+            if (A.shape().dims.size() == 1 && B.shape().dims.size() == 2) {
+                // B is [M, N], A is [N] -> broadcast A across rows
+                int64_t M = B.shape().dims[0];
+                int64_t N = B.shape().dims[1];
+                TBN_CHECK(A.shape().dims[0] == N, InvalidShapeError,
+                          "Broadcasting: A size must match last dim of B");
+
+                Tensor output(B.shape(), B.dtype());
+                const float* A_data = A.typed_data<float>();
+                const float* B_data = B.typed_data<float>();
+                float* output_data = output.typed_data<float>();
+
+                for (int64_t i = 0; i < M; ++i) {
+                    for (int64_t j = 0; j < N; ++j) {
+                        output_data[i * N + j] = A_data[j] + B_data[i * N + j];
+                    }
+                }
+                intermediate_tensors_[node.outputs[0]] = output;
+                return;
+            }
+
+            // Same shape case
+            TBN_CHECK(A.shape() == B.shape(), InvalidShapeError,
+                      "Add requires same shape tensors or broadcastable shapes");
+
+            Tensor output(A.shape(), A.dtype());
+            const float* A_data = A.typed_data<float>();
+            const float* B_data = B.typed_data<float>();
+            float* output_data = output.typed_data<float>();
+
+            for (int64_t i = 0; i < A.num_elements(); ++i) {
+                output_data[i] = A_data[i] + B_data[i];
+            }
+
+            intermediate_tensors_[node.outputs[0]] = output;
+        }
+
+        void execute_reshape(const ModelNode& node) {
+            // ONNX Reshape
+            TBN_CHECK(node.inputs.size() >= 1, InvalidArgumentError, "Reshape expects at least 1 input");
+            TBN_CHECK(node.outputs.size() == 1, InvalidArgumentError, "Reshape expects 1 output");
+
+            const auto& data_name = node.inputs[0];
+            auto it_data = intermediate_tensors_.find(data_name);
+            TBN_CHECK(it_data != intermediate_tensors_.end(), RuntimeError, "Reshape input not found");
+
+            const Tensor& data = it_data->second;
+
+            // Get shape from second input or attribute
+            Shape new_shape;
+            if (node.inputs.size() >= 2) {
+                const auto& shape_name = node.inputs[1];
+                auto it_shape = intermediate_tensors_.find(shape_name);
+                if (it_shape != intermediate_tensors_.end()) {
+                    const Tensor& shape_tensor = it_shape->second;
+                    const int64_t* shape_data = shape_tensor.typed_data<int64_t>();
+                    for (int i = 0; i < shape_tensor.num_elements(); ++i) {
+                        new_shape.dims.push_back(shape_data[i]);
+                    }
+                }
+            }
+
+            // Handle -1 dimension (infer)
+            int64_t known_size = 1;
+            int unknown_dim = -1;
+            for (size_t i = 0; i < new_shape.dims.size(); ++i) {
+                if (new_shape.dims[i] == -1) {
+                    unknown_dim = i;
+                } else {
+                    known_size *= new_shape.dims[i];
+                }
+            }
+            if (unknown_dim >= 0) {
+                new_shape.dims[unknown_dim] = data.num_elements() / known_size;
+            }
+
+            // Create reshaped tensor (shares data)
+            Tensor output(new_shape, data.dtype());
+            std::memcpy(output.data(), data.data(), data.num_elements() * sizeof(float));
+            intermediate_tensors_[node.outputs[0]] = output;
+        }
+
+        void execute_flatten(const ModelNode& node) {
+            // ONNX Flatten: flatten from axis dimension
+            TBN_CHECK(node.inputs.size() == 1, InvalidArgumentError, "Flatten expects 1 input");
+            TBN_CHECK(node.outputs.size() == 1, InvalidArgumentError, "Flatten expects 1 output");
+
+            const auto& input_name = node.inputs[0];
+            auto it_input = intermediate_tensors_.find(input_name);
+            TBN_CHECK(it_input != intermediate_tensors_.end(), RuntimeError, "Flatten input not found");
+
+            const Tensor& input = it_input->second;
+
+            // Get axis (default 1)
+            int axis = 1;
+            auto attr_it = node.attributes.find("axis");
+            if (attr_it != node.attributes.end() && attr_it->second.is_int()) {
+                axis = static_cast<int>(attr_it->second.as_int());
+            }
+
+            // Compute output shape
+            int64_t outer_size = 1;
+            int64_t inner_size = 1;
+            for (int i = 0; i < axis; ++i) {
+                outer_size *= input.shape().dims[i];
+            }
+            for (size_t i = axis; i < input.shape().dims.size(); ++i) {
+                inner_size *= input.shape().dims[i];
+            }
+
+            Shape new_shape{outer_size, inner_size};
+            Tensor output(new_shape, input.dtype());
+            std::memcpy(output.data(), input.data(), input.num_elements() * sizeof(float));
+            intermediate_tensors_[node.outputs[0]] = output;
         }
 
         void execute_relu(const ModelNode& node) {
@@ -246,10 +479,6 @@ public:
 };
 
 } // namespace tbn
-
-// Include standard libraries
-#include <cmath>
-#include <algorithm>
 
 namespace tbn {
 

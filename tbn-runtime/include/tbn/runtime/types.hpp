@@ -10,14 +10,19 @@ namespace tbn {
 
 enum class DataType {
     FLOAT32,
+    FLOAT16,    // 16-bit floating point
+    BFLOAT16,   // Brain floating point
     INT8,
     INT16,
     INT32,
+    INT64,
     UINT8,
     UINT16,
     UINT32,
-    TERNARY,
-    BINARY
+    UINT64,
+    BOOL,
+    TERNARY,    // -1, 0, +1 (2-bit packed)
+    BINARY      // 0, 1 (1-bit packed)
 };
 
 enum class DeviceType {

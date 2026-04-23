@@ -38,6 +38,11 @@ add_executable(test_conv2d_optimized
     test_conv2d_optimized.cpp
 )
 
+# Create test for ONNX Conv speed
+add_executable(test_onnx_conv_speed
+    test_onnx_conv_speed.cpp
+)
+
 target_link_libraries(tbn_simple_test
     PRIVATE
     tbn
@@ -49,6 +54,11 @@ target_link_libraries(test_quantized_operators
 )
 
 target_link_libraries(test_conv2d_optimized
+    PRIVATE
+    tbn
+)
+
+target_link_libraries(test_onnx_conv_speed
     PRIVATE
     tbn
 )

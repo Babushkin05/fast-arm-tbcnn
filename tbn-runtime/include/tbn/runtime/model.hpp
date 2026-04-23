@@ -6,6 +6,7 @@
 #include "../utils/logging.hpp"
 #include "../operators/gemm.hpp"
 #include "../operators/conv2d.hpp"
+#include "../operators/quantized_gemm.hpp"
 #include <memory>
 #include <unordered_map>
 #include <string>
@@ -272,10 +273,27 @@ public:
                 }
             }
 
-            // Execute convolution
+            // Execute convolution with automatic quantization for optimization
             Tensor result;
             if (params.groups == 1) {
-                result = conv2d(X, W, B, params);
+                // Check weight type and use optimized path when possible
+                if (W.dtype() == DataType::BINARY) {
+                    // Already binary - use optimized Conv2D
+                    TBN_LOG_INFO("Conv: using optimized binary path");
+                    result = conv2d_binary(X, W, B, params);
+                } else if (W.dtype() == DataType::TERNARY) {
+                    // Ternary weights - convert and use optimized path
+                    TBN_LOG_INFO("Conv: using optimized ternary path");
+                    result = conv2d_ternary(X, W, B, params);
+                } else if (W.dtype() == DataType::FLOAT32) {
+                    // Float weights - quantize to binary on-the-fly for optimization
+                    TBN_LOG_INFO("Conv: quantizing float weights to binary for optimization");
+                    Tensor binary_W = quantize_to_binary(W);
+                    result = conv2d_binary(X, binary_W, B, params);
+                } else {
+                    // Fallback to naive implementation
+                    result = conv2d(X, W, B, params);
+                }
             } else {
                 result = conv2d_grouped(X, W, B, params.groups, params);
             }

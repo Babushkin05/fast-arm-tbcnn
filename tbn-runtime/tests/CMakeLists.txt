@@ -43,6 +43,11 @@ add_executable(test_onnx_conv_speed
     test_onnx_conv_speed.cpp
 )
 
+# Create test for pooling
+add_executable(test_pooling
+    test_pooling.cpp
+)
+
 target_link_libraries(tbn_simple_test
     PRIVATE
     tbn
@@ -59,6 +64,11 @@ target_link_libraries(test_conv2d_optimized
 )
 
 target_link_libraries(test_onnx_conv_speed
+    PRIVATE
+    tbn
+)
+
+target_link_libraries(test_pooling
     PRIVATE
     tbn
 )

@@ -7,6 +7,7 @@
 #include "../operators/gemm.hpp"
 #include "../operators/conv2d.hpp"
 #include "../operators/quantized_gemm.hpp"
+#include "../operators/pooling.hpp"
 #include <memory>
 #include <unordered_map>
 #include <string>
@@ -197,6 +198,14 @@ public:
                 execute_reshape(node);
             } else if (node.op_type == "Flatten") {
                 execute_flatten(node);
+            } else if (node.op_type == "MaxPool") {
+                execute_maxpool(node);
+            } else if (node.op_type == "AveragePool" || node.op_type == "AvgPool") {
+                execute_avgpool(node);
+            } else if (node.op_type == "GlobalMaxPool") {
+                execute_global_maxpool(node);
+            } else if (node.op_type == "GlobalAveragePool" || node.op_type == "GlobalAvgPool") {
+                execute_global_avgpool(node);
             } else {
                 throw NotImplementedError("Operator '" + node.op_type + "' not implemented");
             }
@@ -298,6 +307,136 @@ public:
                 result = conv2d_grouped(X, W, B, params.groups, params);
             }
 
+            intermediate_tensors_[node.outputs[0]] = result;
+        }
+
+        void execute_maxpool(const ModelNode& node) {
+            // ONNX MaxPool
+            TBN_CHECK(node.inputs.size() >= 1, InvalidArgumentError, "MaxPool expects at least 1 input");
+            TBN_CHECK(node.outputs.size() >= 1, InvalidArgumentError, "MaxPool expects at least 1 output");
+
+            const auto& X_name = node.inputs[0];
+            auto it_X = intermediate_tensors_.find(X_name);
+            TBN_CHECK(it_X != intermediate_tensors_.end(), RuntimeError, "MaxPool input not found");
+
+            const Tensor& X = it_X->second;
+
+            // Extract Pool2DParams from ONNX attributes
+            Pool2DParams params;
+
+            auto attr_it = node.attributes.find("kernel_shape");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& kernel = attr_it->second.as_ints();
+                if (kernel.size() >= 2) {
+                    params.kernel_h = kernel[0];
+                    params.kernel_w = kernel[1];
+                }
+            }
+
+            attr_it = node.attributes.find("strides");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& strides = attr_it->second.as_ints();
+                if (strides.size() >= 2) {
+                    params.stride_h = strides[0];
+                    params.stride_w = strides[1];
+                }
+            } else {
+                // Default stride = kernel size if not specified
+                params.stride_h = params.kernel_h;
+                params.stride_w = params.kernel_w;
+            }
+
+            attr_it = node.attributes.find("pads");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& pads = attr_it->second.as_ints();
+                if (pads.size() >= 4) {
+                    params.pad_h = pads[0];
+                    params.pad_w = pads[1];
+                }
+            }
+
+            attr_it = node.attributes.find("ceil_mode");
+            if (attr_it != node.attributes.end() && attr_it->second.is_int()) {
+                params.ceil_mode = (attr_it->second.as_int() != 0);
+            }
+
+            Tensor result = maxpool2d(X, params);
+            intermediate_tensors_[node.outputs[0]] = result;
+        }
+
+        void execute_avgpool(const ModelNode& node) {
+            // ONNX AveragePool
+            TBN_CHECK(node.inputs.size() >= 1, InvalidArgumentError, "AveragePool expects at least 1 input");
+            TBN_CHECK(node.outputs.size() >= 1, InvalidArgumentError, "AveragePool expects at least 1 output");
+
+            const auto& X_name = node.inputs[0];
+            auto it_X = intermediate_tensors_.find(X_name);
+            TBN_CHECK(it_X != intermediate_tensors_.end(), RuntimeError, "AveragePool input not found");
+
+            const Tensor& X = it_X->second;
+
+            Pool2DParams params;
+
+            auto attr_it = node.attributes.find("kernel_shape");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& kernel = attr_it->second.as_ints();
+                if (kernel.size() >= 2) {
+                    params.kernel_h = kernel[0];
+                    params.kernel_w = kernel[1];
+                }
+            }
+
+            attr_it = node.attributes.find("strides");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& strides = attr_it->second.as_ints();
+                if (strides.size() >= 2) {
+                    params.stride_h = strides[0];
+                    params.stride_w = strides[1];
+                }
+            } else {
+                params.stride_h = params.kernel_h;
+                params.stride_w = params.kernel_w;
+            }
+
+            attr_it = node.attributes.find("pads");
+            if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
+                const auto& pads = attr_it->second.as_ints();
+                if (pads.size() >= 4) {
+                    params.pad_h = pads[0];
+                    params.pad_w = pads[1];
+                }
+            }
+
+            attr_it = node.attributes.find("count_include_pad");
+            if (attr_it != node.attributes.end() && attr_it->second.is_int()) {
+                params.count_include_pad = (attr_it->second.as_int() != 0);
+            }
+
+            Tensor result = avgpool2d(X, params);
+            intermediate_tensors_[node.outputs[0]] = result;
+        }
+
+        void execute_global_maxpool(const ModelNode& node) {
+            TBN_CHECK(node.inputs.size() >= 1, InvalidArgumentError, "GlobalMaxPool expects at least 1 input");
+            TBN_CHECK(node.outputs.size() >= 1, InvalidArgumentError, "GlobalMaxPool expects at least 1 output");
+
+            const auto& X_name = node.inputs[0];
+            auto it_X = intermediate_tensors_.find(X_name);
+            TBN_CHECK(it_X != intermediate_tensors_.end(), RuntimeError, "GlobalMaxPool input not found");
+
+            Tensor result = global_maxpool2d(it_X->second);
+            intermediate_tensors_[node.outputs[0]] = result;
+        }
+
+        void execute_global_avgpool(const ModelNode& node) {
+            TBN_CHECK(node.inputs.size() >= 1, InvalidArgumentError, "GlobalAveragePool expects at least 1 input");
+            TBN_CHECK(node.outputs.size() >= 1, InvalidArgumentError, "GlobalAveragePool expects at least 1 output");
+
+            const auto& X_name = node.inputs[0];
+            auto it_X = intermediate_tensors_.find(X_name);
+            TBN_CHECK(it_X != intermediate_tensors_.end(), RuntimeError, "GlobalAveragePool input not found");
+
+            Tensor result = global_avgpool2d(it_X->second);
             intermediate_tensors_[node.outputs[0]] = result;
         }
 

@@ -13,11 +13,31 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(TBN_BUILD_TESTS "Build tests" ON)
 option(TBN_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(TBN_BUILD_EXAMPLES "Build examples" ON)
+option(TBN_BUILD_PYTHON "Build Python bindings" ON)
 
 # ============================================================================
 # Dependencies
 # ============================================================================
 find_package(Threads REQUIRED)
+
+# pybind11 for Python bindings
+if(TBN_BUILD_PYTHON)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+
+    # Try to find pybind11, if not found fetch it
+    find_package(pybind11 CONFIG QUIET)
+    if(NOT pybind11_FOUND)
+        include(FetchContent)
+        FetchContent_Declare(
+            pybind11
+            GIT_REPOSITORY https://github.com/pybind/pybind11.git
+            GIT_TAG v2.11.1
+        )
+        FetchContent_MakeAvailable(pybind11)
+    endif()
+    message(STATUS "Python3: ${Python3_VERSION}")
+    message(STATUS "pybind11 found: ${pybind11_FOUND}")
+endif()
 
 # Find protobuf
 find_package(Protobuf REQUIRED)
@@ -102,4 +122,31 @@ endif()
 
 if(TBN_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+# ============================================================================
+# Python Bindings
+# ============================================================================
+if(TBN_BUILD_PYTHON)
+    pybind11_add_module(tbn_python python/bindings.cpp)
+
+    target_link_libraries(tbn_python PRIVATE tbn)
+
+    target_compile_definitions(tbn_python PRIVATE
+        TBN_ONNX_RUNTIME_ENABLED
+        ONNX_ML
+    )
+
+    target_include_directories(tbn_python PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ONNX_INCLUDE_DIRS}
+    )
+
+    # Set output name to 'tbn' (not 'tbn_python')
+    set_target_properties(tbn_python PROPERTIES
+        OUTPUT_NAME tbn
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/python
+    )
+
+    message(STATUS "Python module will be built at: ${CMAKE_BINARY_DIR}/python")
 endif()

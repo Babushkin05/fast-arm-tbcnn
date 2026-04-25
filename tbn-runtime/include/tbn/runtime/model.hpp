@@ -141,8 +141,16 @@ public:
         }
 
         void run() {
-            TBN_CHECK(input_tensors_.size() == graph_->inputs.size(), InvalidArgumentError,
-                      "Not all inputs provided");
+            // Count inputs that are NOT in initializers (actual user inputs)
+            size_t user_input_count = 0;
+            for (const auto& name : graph_->inputs) {
+                if (graph_->initializers.find(name) == graph_->initializers.end()) {
+                    user_input_count++;
+                }
+            }
+            TBN_CHECK(input_tensors_.size() == user_input_count, InvalidArgumentError,
+                      "Not all inputs provided (expected " + std::to_string(user_input_count) +
+                      ", got " + std::to_string(input_tensors_.size()) + ")");
 
             // Clear previous outputs
             output_tensors_.clear();
@@ -574,6 +582,65 @@ public:
                 for (int64_t i = 0; i < M; ++i) {
                     for (int64_t j = 0; j < N; ++j) {
                         output_data[i * N + j] = A_data[j] + B_data[i * N + j];
+                    }
+                }
+                intermediate_tensors_[node.outputs[0]] = output;
+                return;
+            }
+
+            // 4D + 3D broadcasting (Conv bias case: [N, C, H, W] + [C, 1, 1])
+            if (A.shape().dims.size() == 4 && B.shape().dims.size() == 3 &&
+                B.shape().dims[1] == 1 && B.shape().dims[2] == 1) {
+                int64_t N = A.shape().dims[0];
+                int64_t C = A.shape().dims[1];
+                int64_t H = A.shape().dims[2];
+                int64_t W = A.shape().dims[3];
+                TBN_CHECK(B.shape().dims[0] == C, InvalidShapeError,
+                          "Broadcasting: B channels must match A");
+
+                Tensor output(A.shape(), A.dtype());
+                const float* A_data = A.typed_data<float>();
+                const float* B_data = B.typed_data<float>();
+                float* output_data = output.typed_data<float>();
+
+                for (int64_t n = 0; n < N; ++n) {
+                    for (int64_t c = 0; c < C; ++c) {
+                        float bias = B_data[c];
+                        for (int64_t h = 0; h < H; ++h) {
+                            for (int64_t w = 0; w < W; ++w) {
+                                int64_t idx = ((n * C + c) * H + h) * W + w;
+                                output_data[idx] = A_data[idx] + bias;
+                            }
+                        }
+                    }
+                }
+                intermediate_tensors_[node.outputs[0]] = output;
+                return;
+            }
+
+            // 4D + 1D broadcasting (Conv bias case: [N, C, H, W] + [C])
+            if (A.shape().dims.size() == 4 && B.shape().dims.size() == 1) {
+                int64_t N = A.shape().dims[0];
+                int64_t C = A.shape().dims[1];
+                int64_t H = A.shape().dims[2];
+                int64_t W = A.shape().dims[3];
+                TBN_CHECK(B.shape().dims[0] == C, InvalidShapeError,
+                          "Broadcasting: B size must match A channels");
+
+                Tensor output(A.shape(), A.dtype());
+                const float* A_data = A.typed_data<float>();
+                const float* B_data = B.typed_data<float>();
+                float* output_data = output.typed_data<float>();
+
+                for (int64_t n = 0; n < N; ++n) {
+                    for (int64_t c = 0; c < C; ++c) {
+                        float bias = B_data[c];
+                        for (int64_t h = 0; h < H; ++h) {
+                            for (int64_t w = 0; w < W; ++w) {
+                                int64_t idx = ((n * C + c) * H + h) * W + w;
+                                output_data[idx] = A_data[idx] + bias;
+                            }
+                        }
                     }
                 }
                 intermediate_tensors_[node.outputs[0]] = output;

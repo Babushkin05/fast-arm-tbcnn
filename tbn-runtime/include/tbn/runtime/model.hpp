@@ -266,6 +266,22 @@ public:
                 }
             }
 
+            // Handle auto_pad attribute (SAME_UPPER, SAME_LOWER, NOTSET)
+            attr_it = node.attributes.find("auto_pad");
+            if (attr_it != node.attributes.end() && attr_it->second.is_string()) {
+                const std::string& auto_pad = attr_it->second.as_string();
+                if (auto_pad == "SAME_UPPER" || auto_pad == "SAME_LOWER") {
+                    // Calculate padding for same output size
+                    // pad = (kernel - 1) / 2 for stride=1, dilation=1
+                    int64_t kernel_h = params.kernel_h > 0 ? params.kernel_h : W.shape().dims[2];
+                    int64_t kernel_w = params.kernel_w > 0 ? params.kernel_w : W.shape().dims[3];
+                    int64_t total_pad_h = (kernel_h - 1) * params.dilation_h;
+                    int64_t total_pad_w = (kernel_w - 1) * params.dilation_w;
+                    params.pad_h = total_pad_h / 2;
+                    params.pad_w = total_pad_w / 2;
+                }
+            }
+
             attr_it = node.attributes.find("dilations");
             if (attr_it != node.attributes.end() && attr_it->second.is_ints()) {
                 const auto& dilations = attr_it->second.as_ints();
@@ -303,10 +319,9 @@ public:
                     TBN_LOG_INFO("Conv: using optimized ternary path");
                     result = conv2d_ternary(X, W, B, params);
                 } else if (W.dtype() == DataType::FLOAT32) {
-                    // Float weights - quantize to binary on-the-fly for optimization
-                    TBN_LOG_INFO("Conv: quantizing float weights to binary for optimization");
-                    Tensor binary_W = quantize_to_binary(W);
-                    result = conv2d_binary(X, binary_W, B, params);
+                    // Float weights - use standard Conv2D (no quantization for accuracy)
+                    TBN_LOG_INFO("Conv: using standard float path");
+                    result = conv2d(X, W, B, params);
                 } else {
                     // Fallback to naive implementation
                     result = conv2d(X, W, B, params);
@@ -315,6 +330,9 @@ public:
                 result = conv2d_grouped(X, W, B, params.groups, params);
             }
 
+            TBN_LOG_INFO("Conv result: " + shape_to_string(result.shape()) +
+                          " first=" + std::to_string(result.typed_data<float>()[0]) +
+                          " last=" + std::to_string(result.typed_data<float>()[result.num_elements()-1]));
             intermediate_tensors_[node.outputs[0]] = result;
         }
 
@@ -522,7 +540,23 @@ public:
 
             // For 2D tensors, use GEMM
             if (A.shape().dims.size() == 2 && B.shape().dims.size() == 2) {
+                TBN_LOG_INFO("MatMul: A=" + shape_to_string(A.shape()) + " B=" + shape_to_string(B.shape()));
+                TBN_LOG_INFO("MatMul A[0:5]: " + std::to_string(A.typed_data<float>()[0]) + ", " +
+                              std::to_string(A.typed_data<float>()[1]) + ", " +
+                              std::to_string(A.typed_data<float>()[2]) + ", " +
+                              std::to_string(A.typed_data<float>()[3]) + ", " +
+                              std::to_string(A.typed_data<float>()[4]));
+                TBN_LOG_INFO("MatMul B[0:5]: " + std::to_string(B.typed_data<float>()[0]) + ", " +
+                              std::to_string(B.typed_data<float>()[1]) + ", " +
+                              std::to_string(B.typed_data<float>()[2]) + ", " +
+                              std::to_string(B.typed_data<float>()[3]) + ", " +
+                              std::to_string(B.typed_data<float>()[4]));
                 Tensor result = gemm(A, B, nullptr, 1.0f, 0.0f, false, false);
+                TBN_LOG_INFO("MatMul result[0:5]: " + std::to_string(result.typed_data<float>()[0]) + ", " +
+                              std::to_string(result.typed_data<float>()[1]) + ", " +
+                              std::to_string(result.typed_data<float>()[2]) + ", " +
+                              std::to_string(result.typed_data<float>()[3]) + ", " +
+                              std::to_string(result.typed_data<float>()[4]));
                 intermediate_tensors_[node.outputs[0]] = result;
             } else {
                 throw NotImplementedError("MatMul for non-2D tensors not implemented");
@@ -704,7 +738,16 @@ public:
 
             // Create reshaped tensor (shares data)
             Tensor output(new_shape, data.dtype());
-            std::memcpy(output.data(), data.data(), data.num_elements() * sizeof(float));
+            size_t element_size = 0;
+            switch (data.dtype()) {
+                case DataType::FLOAT32: element_size = sizeof(float); break;
+                case DataType::INT32: element_size = sizeof(int32_t); break;
+                case DataType::INT64: element_size = sizeof(int64_t); break;
+                case DataType::INT8: element_size = sizeof(int8_t); break;
+                case DataType::UINT8: element_size = sizeof(uint8_t); break;
+                default: element_size = sizeof(float); // fallback
+            }
+            std::memcpy(output.data(), data.data(), data.num_elements() * element_size);
             intermediate_tensors_[node.outputs[0]] = output;
         }
 

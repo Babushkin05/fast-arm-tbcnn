@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-04-26T02:40:38.697779",
+  "device": {
+    "platform": "Darwin",
+    "machine": "arm64",
+    "processor": "arm",
+    "python": "3.14.2",
+    "cpu": "Apple M4 Pro"
+  },
+  "config": {
+    "num_samples": 1000,
+    "warmup": 5,
+    "runs": 100
+  },
+  "results": [
+    {
+      "runtime": "TBN (float)",
+      "latency_ms": 0.5241420737002045,
+      "latency_std_ms": 0.028678325195715886,
+      "throughput_ips": 1907.8796573998632,
+      "accuracy_pct": 100.0,
+      "model_size_kb": 25.833984375
+    },
+    {
+      "runtime": "TBN (quantized)",
+      "latency_ms": 0.5636226269416511,
+      "latency_std_ms": 0.04229952653649465,
+      "throughput_ips": 1774.23678929683,
+      "accuracy_pct": 2.0,
+      "model_size_kb": 25.833984375
+    },
+    {
+      "runtime": "ONNX Runtime",
+      "latency_ms": 0.05923161399550736,
+      "latency_std_ms": 0.004229571789543072,
+      "throughput_ips": 16882.876095117866,
+      "accuracy_pct": 100.0,
+      "model_size_kb": 25.833984375
+    },
+    {
+      "runtime": "PyTorch",
+      "latency_ms": 0.13600752339698374,
+      "latency_std_ms": 0.019669468643098965,
+      "throughput_ips": 7352.534440915914,
+      "accuracy_pct": 100.0,
+      "model_size_kb": 25.833984375
+    }
+  ]
+}

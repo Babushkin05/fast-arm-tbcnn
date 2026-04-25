@@ -55,7 +55,7 @@ public:
         model_ = load_onnx_model(path);
     }
 
-    py::array_t<float> run(py::array_t<float> input) {
+    py::array_t<float> run(py::array_t<float> input, bool use_quantization = false) {
         // Convert input
         Tensor input_tensor = numpy_to_tensor(input);
 
@@ -67,6 +67,7 @@ public:
 
         // Create session and run
         auto session = model_.create_session();
+        session.set_quantization(use_quantization);  // Enable/disable quantization
         session.set_input(input_names[0], input_tensor);
         session.run();
 
@@ -78,6 +79,11 @@ public:
 
         Tensor output = session.get_output(output_names[0]);
         return tensor_to_numpy(output);
+    }
+
+    // Run with quantization enabled (convenience method)
+    py::array_t<float> run_quantized(py::array_t<float> input) {
+        return run(input, true);
     }
 
     std::vector<std::string> get_input_names() const {
@@ -121,7 +127,8 @@ PYBIND11_MODULE(tbn, m) {
     // Model class
     py::class_<PyModel>(m, "Model")
         .def(py::init<const std::string&>(), py::arg("path"))
-        .def("run", &PyModel::run, py::arg("input"))
+        .def("run", &PyModel::run, py::arg("input"), py::arg("use_quantization") = false)
+        .def("run_quantized", &PyModel::run_quantized, py::arg("input"))
         .def("input_names", &PyModel::get_input_names)
         .def("output_names", &PyModel::get_output_names)
         .def("input_shape", &PyModel::get_input_shape, py::arg("name"));

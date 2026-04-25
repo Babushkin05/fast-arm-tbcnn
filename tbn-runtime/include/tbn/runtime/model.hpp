@@ -121,9 +121,14 @@ public:
         std::unordered_map<std::string, Tensor> input_tensors_;
         std::unordered_map<std::string, Tensor> output_tensors_;
         std::unordered_map<std::string, Tensor> intermediate_tensors_;
+        bool use_quantization_ = false;  // Enable binary weight quantization
 
     public:
         Session(std::shared_ptr<ModelGraph> graph) : graph_(graph) {}
+
+        // Enable/disable quantization for faster inference
+        void set_quantization(bool enable) { use_quantization_ = enable; }
+        bool is_quantization_enabled() const { return use_quantization_; }
 
         void set_input(const std::string& name, const Tensor& tensor) {
             TBN_CHECK(graph_->value_info.count(name) > 0, InvalidArgumentError,
@@ -319,9 +324,17 @@ public:
                     TBN_LOG_INFO("Conv: using optimized ternary path");
                     result = conv2d_ternary(X, W, B, params);
                 } else if (W.dtype() == DataType::FLOAT32) {
-                    // Float weights - use standard Conv2D (no quantization for accuracy)
-                    TBN_LOG_INFO("Conv: using standard float path");
-                    result = conv2d(X, W, B, params);
+                    // Float weights - check if quantization is enabled
+                    if (use_quantization_) {
+                        // Quantize to binary for optimized inference
+                        TBN_LOG_INFO("Conv: quantizing float weights to binary");
+                        Tensor binary_W = quantize_to_binary(W);
+                        result = conv2d_binary(X, binary_W, B, params);
+                    } else {
+                        // Use standard float path
+                        TBN_LOG_INFO("Conv: using standard float path");
+                        result = conv2d(X, W, B, params);
+                    }
                 } else {
                     // Fallback to naive implementation
                     result = conv2d(X, W, B, params);

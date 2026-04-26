@@ -6,6 +6,8 @@
 #include "../utils/logging.hpp"
 #include "conv2d.hpp"
 
+#include <unordered_map>
+
 namespace tbn {
 
 /**

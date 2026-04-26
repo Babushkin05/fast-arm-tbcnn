@@ -6,6 +6,7 @@
 #include "../../include/tbn/memory/packed_weights.hpp"
 #include <cmath>
 #include <algorithm>
+#include <unordered_map>
 #include <vector>
 
 // Helper function

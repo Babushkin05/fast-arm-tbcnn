@@ -247,33 +247,35 @@ def benchmark_pytorch(images, labels, model_path, warmup=10, runs=100):
     for init in onnx_model.graph.initializer:
         weights[init.name] = numpy_helper.to_array(init)
 
-    # Build equivalent PyTorch model
+    # Build equivalent PyTorch model for TBN architecture
+    # conv1: [16, 1, 5, 5], conv2: [32, 16, 5, 5], fc: [10, 512]
     # Pool1: 2x2 stride 2, Pool2: 3x3 stride 3
     class MNISTNet(nn.Module):
         def __init__(self):
             super().__init__()
-            self.conv1 = nn.Conv2d(1, 8, 5, padding=2)
-            self.conv2 = nn.Conv2d(8, 16, 5, padding=2)
-            self.fc = nn.Linear(256, 10)
+            self.conv1 = nn.Conv2d(1, 16, 5, padding=2)
+            self.conv2 = nn.Conv2d(16, 32, 5, padding=2)
+            self.fc = nn.Linear(512, 10)
 
         def forward(self, x):
-            x = torch.relu(self.conv1(x))      # [1, 8, 28, 28]
-            x = torch.max_pool2d(x, 2, 2)      # [1, 8, 14, 14]
-            x = torch.relu(self.conv2(x))      # [1, 16, 14, 14]
-            x = torch.max_pool2d(x, 3, 3)      # [1, 16, 4, 4]
-            x = x.view(x.size(0), -1)          # [1, 256]
+            x = torch.relu(self.conv1(x))      # [1, 16, 28, 28]
+            x = torch.max_pool2d(x, 2, 2)      # [1, 16, 14, 14]
+            x = torch.relu(self.conv2(x))      # [1, 32, 14, 14]
+            x = torch.max_pool2d(x, 3, 3)      # [1, 32, 4, 4]
+            x = x.view(x.size(0), -1)          # [1, 512]
             x = self.fc(x)                     # [1, 10]
             return x
 
     net = MNISTNet()
 
-    # Load weights
-    net.conv1.weight.data = torch.from_numpy(weights['Parameter5'])
-    net.conv1.bias.data = torch.from_numpy(weights['Parameter6'].flatten())
-    net.conv2.weight.data = torch.from_numpy(weights['Parameter87'])
-    net.conv2.bias.data = torch.from_numpy(weights['Parameter88'].flatten())
-    net.fc.weight.data = torch.from_numpy(weights['Parameter193'].reshape(256, 10).T)
-    net.fc.bias.data = torch.from_numpy(weights['Parameter194'].flatten())
+    # Load weights from ONNX
+    net.conv1.weight.data = torch.from_numpy(weights['conv1_w'])
+    net.conv1.bias.data = torch.from_numpy(weights['conv1_b'].flatten())
+    net.conv2.weight.data = torch.from_numpy(weights['conv2_w'])
+    net.conv2.bias.data = torch.from_numpy(weights['conv2_b'].flatten())
+    # fc_w is stored as [10, 512], need to transpose for PyTorch Linear
+    net.fc.weight.data = torch.from_numpy(weights['fc_w'])
+    net.fc.bias.data = torch.from_numpy(weights['fc_b'].flatten())
 
     net.eval()
 
@@ -337,8 +339,8 @@ def run_benchmark(output_dir=None, num_samples=1000, warmup=10, runs=100):
     print(f"\nDevice: {device_info.get('cpu', device_info['machine'])}")
     print(f"Platform: {device_info['platform']} {device_info['machine']}")
 
-    # Paths
-    model_path = script_dir.parent / 'models' / 'mnist' / 'mnist-8.onnx'
+    # Paths - use TBN-trained model for fair comparison
+    model_path = script_dir.parent / 'train' / 'mnist' / 'mnist_tbn.onnx'
 
     if not model_path.exists():
         print(f"Error: Model not found at {model_path}")

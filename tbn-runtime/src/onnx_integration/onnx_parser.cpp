@@ -246,7 +246,9 @@ private:
         Tensor tensor(shape, dtype);
 
         // Copy data based on type
-        if (tensor_proto.has_raw_data()) {
+        // Check raw_data.size() instead of has_raw_data() as some protobuf versions
+        // may not set has_raw_data() correctly for large tensors
+        if (tensor_proto.raw_data().size() > 0) {
             // Raw data
             const std::string& raw_data = tensor_proto.raw_data();
             std::memcpy(tensor.data(), raw_data.data(), raw_data.size());
@@ -262,6 +264,8 @@ private:
             // Int64 data
             const int64_t* src_data = tensor_proto.int64_data().data();
             std::memcpy(tensor.data(), src_data, tensor_proto.int64_data_size() * sizeof(int64_t));
+        } else {
+            TBN_LOG_WARNING("Tensor " + tensor_proto.name() + ": no data found");
         }
 
         return tensor;

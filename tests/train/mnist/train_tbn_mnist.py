@@ -311,7 +311,7 @@ def export_to_onnx(model, output_path, device):
         def forward(self, x):
             # Conv1 + Pool
             x = F.conv2d(x, self.conv1_w, self.conv1_b, padding=2)
-            x = F.relu(x)  # Keep ReLU for compatibility with standard runtimes
+            x = F.relu(x)
             x = F.max_pool2d(x, 2, 2)
 
             # Conv2 + Pool
@@ -319,8 +319,8 @@ def export_to_onnx(model, output_path, device):
             x = F.relu(x)
             x = F.max_pool2d(x, 3, 3)
 
-            # FC
-            x = x.view(x.size(0), -1)
+            # FC - use reshape with known size to avoid Shape operator
+            x = x.reshape(-1, 512)
             x = F.linear(x, self.fc_w, self.fc_b)
 
             return x
@@ -331,13 +331,13 @@ def export_to_onnx(model, output_path, device):
     dummy_input = torch.randn(1, 1, 28, 28, device=device)
 
     # Use opset_version 11 for better compatibility
+    # No dynamic_axes to avoid Shape operators
     torch.onnx.export(
         export_model,
         dummy_input,
         output_path,
         input_names=['input'],
         output_names=['output'],
-        dynamic_axes={'input': {0: 'batch'}, 'output': {0: 'batch'}},
         opset_version=11,
         do_constant_folding=True,
     )
@@ -346,9 +346,22 @@ def export_to_onnx(model, output_path, device):
 
     # Verify export
     import onnx
+    from onnx import numpy_helper, TensorProto
     onnx_model = onnx.load(output_path)
     onnx.checker.check_model(onnx_model)
     print("ONNX model verified successfully")
+
+    # Convert raw_data to float_data for better C++ compatibility
+    # Some protobuf versions have issues reading raw_data for large tensors
+    for init in onnx_model.graph.initializer:
+        if len(init.raw_data) > 0 and len(init.float_data) == 0 and init.data_type == TensorProto.FLOAT:
+            arr = numpy_helper.to_array(init)
+            init.ClearField('raw_data')
+            init.float_data.extend(arr.flatten().tolist())
+            print(f"Converted {init.name} from raw_data to float_data")
+
+    onnx.save(onnx_model, output_path)
+    print(f"Saved optimized ONNX model to {output_path}")
 
 
 def main():

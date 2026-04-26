@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-26T02:40:38.697779",
+  "timestamp": "2026-04-27T00:52:30.846000",
   "device": {
     "platform": "Darwin",
     "machine": "arm64",
@@ -8,42 +8,42 @@
     "cpu": "Apple M4 Pro"
   },
   "config": {
-    "num_samples": 1000,
-    "warmup": 5,
+    "num_samples": 500,
+    "warmup": 10,
     "runs": 100
   },
   "results": [
     {
       "runtime": "TBN (float)",
-      "latency_ms": 0.5241420737002045,
-      "latency_std_ms": 0.028678325195715886,
-      "throughput_ips": 1907.8796573998632,
-      "accuracy_pct": 100.0,
-      "model_size_kb": 25.833984375
+      "latency_ms": 1.856719630304724,
+      "latency_std_ms": 0.07073150556895094,
+      "throughput_ips": 538.5842771726825,
+      "accuracy_pct": 96.0,
+      "model_size_kb": 80.568359375
     },
     {
       "runtime": "TBN (quantized)",
-      "latency_ms": 0.5636226269416511,
-      "latency_std_ms": 0.04229952653649465,
-      "throughput_ips": 1774.23678929683,
-      "accuracy_pct": 2.0,
-      "model_size_kb": 25.833984375
+      "latency_ms": 1.8636312428861856,
+      "latency_std_ms": 0.07329599630550365,
+      "throughput_ips": 536.5868402438407,
+      "accuracy_pct": 96.0,
+      "model_size_kb": 80.568359375
     },
     {
       "runtime": "ONNX Runtime",
-      "latency_ms": 0.05923161399550736,
-      "latency_std_ms": 0.004229571789543072,
-      "throughput_ips": 16882.876095117866,
-      "accuracy_pct": 100.0,
-      "model_size_kb": 25.833984375
+      "latency_ms": 0.07897423929534853,
+      "latency_std_ms": 0.0188793320118838,
+      "throughput_ips": 12662.356851076356,
+      "accuracy_pct": 96.0,
+      "model_size_kb": 80.568359375
     },
     {
       "runtime": "PyTorch",
-      "latency_ms": 0.13600752339698374,
-      "latency_std_ms": 0.019669468643098965,
-      "throughput_ips": 7352.534440915914,
-      "accuracy_pct": 100.0,
-      "model_size_kb": 25.833984375
+      "latency_ms": 0.15632124501280487,
+      "latency_std_ms": 0.019382322726419612,
+      "throughput_ips": 6397.0831342731835,
+      "accuracy_pct": 60.0,
+      "model_size_kb": 80.568359375
     }
   ]
 }

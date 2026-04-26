@@ -67,11 +67,15 @@ test_results/
 *.log
 *.prof
 
-# Binary files in root
-test_*
-simple_example
-example_*
+# Binary executables (only in build/bin or root, not source files)
+/test_*
+/simple_example
+/example_*
 
-# Keep necessary files
+# Keep source files
+!**/*.cpp
+!**/*.hpp
+!**/*.c
+!**/*.h
 !.gitkeep
 !CMakeLists.txt

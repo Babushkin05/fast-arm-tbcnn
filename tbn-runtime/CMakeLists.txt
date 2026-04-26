@@ -127,6 +127,7 @@ set_target_properties(tbn PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION 1
     PUBLIC_HEADER include/tbn/tbn.hpp
+    POSITION_INDEPENDENT_CODE ON  # Required for Python bindings
 )
 
 # Installation

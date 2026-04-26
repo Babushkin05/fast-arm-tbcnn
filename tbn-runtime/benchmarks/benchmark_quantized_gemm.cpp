@@ -4,6 +4,7 @@
 #include <vector>
 #include <random>
 #include <iomanip>
+#include <functional>
 
 using namespace tbn;
 using namespace std::chrono;

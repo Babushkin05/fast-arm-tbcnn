@@ -42,12 +42,43 @@ endif()
 # Find protobuf
 find_package(Protobuf REQUIRED)
 
-# Find ONNX - manually since CMake config may not be available
-set(ONNX_INCLUDE_DIRS /opt/homebrew/include)
-set(ONNX_LIBRARIES
-    /opt/homebrew/lib/libonnx.dylib
-    /opt/homebrew/lib/libonnx_proto.dylib
-)
+# Find ONNX - try different locations based on platform
+if(APPLE)
+    set(ONNX_INCLUDE_DIRS /opt/homebrew/include)
+    set(ONNX_LIBRARIES
+        /opt/homebrew/lib/libonnx.dylib
+        /opt/homebrew/lib/libonnx_proto.dylib
+    )
+elseif(UNIX)
+    # Linux - try pkg-config first
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ONNX onnx)
+        if(ONNX_FOUND)
+            message(STATUS "ONNX found via pkg-config")
+        endif()
+    endif()
+
+    # Fallback to standard paths
+    if(NOT ONNX_FOUND)
+        find_path(ONNX_INCLUDE_DIRS NAMES onnx/onnx_pb.h
+            PATHS /usr/include /usr/local/include)
+        find_library(ONNX_LIB NAMES onnx libonnx
+            PATHS /usr/lib /usr/local/lib /usr/lib/aarch64-linux-gnu)
+        find_library(ONNX_PROTO_LIB NAMES onnx_proto libonnx_proto
+            PATHS /usr/lib /usr/local/lib /usr/lib/aarch64-linux-gnu)
+        if(ONNX_LIB AND ONNX_PROTO_LIB)
+            set(ONNX_LIBRARIES ${ONNX_LIB} ${ONNX_PROTO_LIB})
+            set(ONNX_FOUND TRUE)
+        endif()
+    endif()
+
+    if(NOT ONNX_FOUND)
+        message(WARNING "ONNX not found - some features may be unavailable")
+        set(ONNX_INCLUDE_DIRS "")
+        set(ONNX_LIBRARIES "")
+    endif()
+endif()
 
 message(STATUS "Protobuf version: ${Protobuf_VERSION}")
 message(STATUS "Protobuf libraries: ${Protobuf_LIBRARIES}")
@@ -89,7 +120,6 @@ target_compile_definitions(tbn PUBLIC
 target_include_directories(tbn PUBLIC
     ${ONNX_INCLUDE_DIRS}
     ${Protobuf_INCLUDE_DIRS}
-    /opt/homebrew/include  # For onnx/ headers
 )
 
 # Set properties

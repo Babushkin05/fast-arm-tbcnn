@@ -373,9 +373,24 @@ public:
 
                         if (already_binary) {
                             // Weights are already binary with per-channel scaling
-                            // Use float path - the scaling is already in the weights
-                            TBN_LOG_DEBUG("Conv: weights already binary-scaled, using float path");
-                            result = conv2d(X, W, B, params);
+                            // Extract binary signs and use optimized path
+                            TBN_LOG_DEBUG("Conv: extracting binary weights for optimized path");
+
+                            // Create binary weight tensor with extracted signs
+                            Tensor binary_W(W.shape(), DataType::BINARY);
+                            BinaryWeight* bw_data = binary_W.typed_data<BinaryWeight>();
+
+                            for (int64_t c = 0; c < n_channels; ++c) {
+                                float scale = channel_scales[c];
+                                for (int64_t i = 0; i < elems_per_channel; ++i) {
+                                    float val = w_data[c * elems_per_channel + i];
+                                    // Extract sign: positive -> BINARY_ONE, negative -> BINARY_ZERO
+                                    bw_data[c * elems_per_channel + i] = (val >= 0) ? BINARY_ONE : BINARY_ZERO;
+                                }
+                            }
+
+                            // Use optimized binary conv with per-channel scales
+                            result = conv2d_binary_with_scales(X, binary_W, B, params, channel_scales);
                         } else {
                             // Quantize to binary for optimized inference
                             TBN_LOG_DEBUG("Conv: quantizing float weights to binary");

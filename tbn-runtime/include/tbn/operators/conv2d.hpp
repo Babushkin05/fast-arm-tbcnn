@@ -4,6 +4,7 @@
 #include "../runtime/types.hpp"
 #include "../utils/errors.hpp"
 #include "../utils/logging.hpp"
+#include <vector>
 
 namespace tbn {
 
@@ -45,6 +46,11 @@ Tensor conv2d_ternary(const Tensor& input, const Tensor& ternary_weights,
 // Binary Conv2D - optimized for binary weights
 Tensor conv2d_binary(const Tensor& input, const Tensor& binary_weights,
                      const Tensor* bias = nullptr, const Conv2DParams& params = Conv2DParams());
+
+// Binary Conv2D with per-channel scales - for binary-scaled weights
+Tensor conv2d_binary_with_scales(const Tensor& input, const Tensor& binary_weights,
+                                  const Tensor* bias, const Conv2DParams& params,
+                                  const std::vector<float>& channel_scales);
 
 // Grouped convolution support
 Tensor conv2d_grouped(const Tensor& input, const Tensor& weights,

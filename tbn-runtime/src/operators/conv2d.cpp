@@ -45,14 +45,29 @@ Tensor reshape_binary_weights_to_2d(const Tensor& weights) {
 }
 
 // Reshape output from [N*out_h*out_w, M] to [N, M, out_h, out_w]
+// NOTE: This requires actual data reordering, not just memcpy!
 Tensor reshape_output_to_4d(const Tensor& output_2d, int64_t N, int64_t M,
                             int64_t out_h, int64_t out_w) {
     Shape shape_4d{N, M, out_h, out_w};
     Tensor output(shape_4d, DataType::FLOAT32);
 
-    // Data is already in correct order, just reshape
-    std::memcpy(output.data(), output_2d.data(),
-                output_2d.num_elements() * sizeof(float));
+    // Transform from [N*out_h*out_w, M] to [N, M, out_h, out_w]
+    // 2D layout: output_2d[n*out_h*out_w + oh*out_w + ow, m]
+    // 4D layout: output[n, m, oh, ow]
+    const float* src = output_2d.typed_data<float>();
+    float* dst = output.typed_data<float>();
+
+    for (int64_t n = 0; n < N; ++n) {
+        for (int64_t m = 0; m < M; ++m) {
+            for (int64_t oh = 0; oh < out_h; ++oh) {
+                for (int64_t ow = 0; ow < out_w; ++ow) {
+                    int64_t src_idx = (n * out_h * out_w + oh * out_w + ow) * M + m;
+                    int64_t dst_idx = ((n * M + m) * out_h + oh) * out_w + ow;
+                    dst[dst_idx] = src[src_idx];
+                }
+            }
+        }
+    }
 
     return output;
 }
@@ -294,10 +309,63 @@ Tensor conv2d_binary(const Tensor& input, const Tensor& binary_weights,
         }
     }
 
-    TBN_LOG_INFO("Conv2D binary (optimized): " + shape_to_string(input.shape()) +
+    TBN_LOG_DEBUG("Conv2D binary (optimized): " + shape_to_string(input.shape()) +
                  " -> " + shape_to_string(output.shape()));
 
     return output;
+}
+
+// Binary Conv2D with per-channel scales - for binary-scaled weights like ±5.85
+Tensor conv2d_binary_with_scales(const Tensor& input, const Tensor& binary_weights,
+                                  const Tensor* bias, const Conv2DParams& params,
+                                  const std::vector<float>& channel_scales) {
+    // First run standard binary convolution
+    Tensor result = conv2d_binary(input, binary_weights, nullptr, params);
+
+    // Apply per-channel scales
+    int64_t N = result.shape().dims[0];
+    int64_t M = result.shape().dims[1];  // output channels
+    int64_t out_h = result.shape().dims[2];
+    int64_t out_w = result.shape().dims[3];
+
+    TBN_CHECK(static_cast<int64_t>(channel_scales.size()) == M, InvalidArgumentError,
+              "channel_scales size must match output channels");
+
+    float* result_data = result.typed_data<float>();
+
+    // Apply scale per output channel
+    for (int64_t n = 0; n < N; ++n) {
+        for (int64_t m = 0; m < M; ++m) {
+            float scale = channel_scales[m];
+            for (int64_t oh = 0; oh < out_h; ++oh) {
+                for (int64_t ow = 0; ow < out_w; ++ow) {
+                    int64_t idx = ((n * M + m) * out_h + oh) * out_w + ow;
+                    result_data[idx] *= scale;
+                }
+            }
+        }
+    }
+
+    // Add bias after scaling
+    if (bias) {
+        TBN_CHECK(bias->shape().dims.size() == 1, InvalidShapeError, "Bias must be 1D");
+        TBN_CHECK(bias->shape().dims[0] == M, InvalidShapeError,
+                  "Bias size must match output channels");
+        const float* bias_data = bias->typed_data<float>();
+
+        for (int64_t n = 0; n < N; ++n) {
+            for (int64_t m = 0; m < M; ++m) {
+                for (int64_t oh = 0; oh < out_h; ++oh) {
+                    for (int64_t ow = 0; ow < out_w; ++ow) {
+                        int64_t idx = ((n * M + m) * out_h + oh) * out_w + ow;
+                        result_data[idx] += bias_data[m];
+                    }
+                }
+            }
+        }
+    }
+
+    return result;
 }
 
 // Grouped convolution

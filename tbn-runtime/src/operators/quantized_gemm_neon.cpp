@@ -17,7 +17,11 @@ namespace tbn {
 // ============================================================================
 constexpr int64_t GEMM_THRESHOLD = 64;  // Use blocked GeMM for matrices >= 64
 
-// Default thresholds for float → ternary quantization
+// Flag to control activation quantization in blocked GeMM
+// Set to false for Float × Binary (keep activations as float)
+constexpr bool QUANTIZE_ACTIVATIONS_BY_DEFAULT = false;
+
+// Default thresholds for float → ternary quantization (when enabled)
 constexpr float DEFAULT_THRESHOLD_LOW = -0.1f;
 constexpr float DEFAULT_THRESHOLD_HIGH = 0.1f;
 
@@ -145,6 +149,8 @@ std::vector<int8_t> convert_binary_to_int8(const Tensor& b_binary) {
 
 // ============================================================================
 // Blocked GeMM implementation using GeMM/05-final
+// NOTE: This quantizes activations to ternary, which may reduce accuracy
+// For Float × Binary without quantization, use naive path instead
 // ============================================================================
 Tensor qlinear_matmul_binary_blocked(
     const Tensor& a,
@@ -261,8 +267,9 @@ Tensor qlinear_matmul_binary(
             ") != B rows (" + std::to_string(K_b) + ")");
     }
 
-    // Use blocked GeMM for larger matrices, naive for small
-    bool use_blocked = (M >= GEMM_THRESHOLD || N >= GEMM_THRESHOLD || K >= GEMM_THRESHOLD);
+    // Use blocked GeMM with NEON-optimized popcount for ternary-binary multiplication
+    // Float activations are quantized to ternary {-1, 0, +1} for bit-packing
+    bool use_blocked = true;  // Enable NEON-optimized blocked GeMM
 
     if (use_blocked) {
         TBN_LOG_DEBUG("Using blocked GeMM implementation");

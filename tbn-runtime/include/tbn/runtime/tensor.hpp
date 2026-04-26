@@ -46,7 +46,12 @@ public:
     void set_quantization_params(const QuantizationParams& params) { quantization_params_ = params; }
 
     // Shape operations
-    int64_t num_elements() const { return shape_.size(); }
+    int64_t num_elements() const {
+        if (shape_.dims.empty()) return 1;  // scalar
+        int64_t n = 1;
+        for (auto d : shape_.dims) n *= d;
+        return n;
+    }
     int64_t dim(int idx) const {
         TBN_CHECK(idx >= 0 && idx < shape_.dims.size(), InvalidArgumentError, "Dimension index out of range");
         return shape_.dims[idx];

@@ -38,11 +38,10 @@ struct PaddedDimensions {
         // GeMM requirements:
         // - TernaryMatrix: rows multiple of 8, cols multiple of 64
         // - BinaryMatrix: rows multiple of 64, cols multiple of 8
-        // - TilingParams: n multiple of 128, kblk multiple of 128
-        // - m multiple of mmk (32), k multiple of nmk (32)
-        m_padded = ((m + 31) / 32) * 32;   // For mmk
-        n_padded = ((n + 127) / 128) * 128; // For NEON alignment
-        k_padded = ((k + 127) / 128) * 128; // For kblk and TernaryMatrix cols
+        // - TilingParams: n multiple of 128, m multiple of mmk (16), k multiple of nmk (8)
+        m_padded = ((m + 15) / 16) * 16;    // multiple of 16 (mmk)
+        k_padded = ((k + 63) / 64) * 64;    // multiple of 64 (TernaryMatrix cols, BinaryMatrix rows)
+        n_padded = ((n + 127) / 128) * 128; // multiple of 128 (TilingParams n)
         needs_padding = (m != m_padded) || (n != n_padded) || (k != k_padded);
     }
 };
@@ -156,6 +155,7 @@ Tensor qlinear_matmul_binary_blocked(
     const Tensor& a,
     const Tensor& b_binary,
     float scale,
+    const TilingParams& params,
     float threshold_low = DEFAULT_THRESHOLD_LOW,
     float threshold_high = DEFAULT_THRESHOLD_HIGH
 ) {
@@ -165,6 +165,11 @@ Tensor qlinear_matmul_binary_blocked(
 
     // Calculate padded dimensions
     PaddedDimensions dims(M, N, K);
+
+    TBN_LOG_DEBUG("qlinear_matmul_binary_blocked: M=" + std::to_string(M) +
+                  " K=" + std::to_string(K) + " N=" + std::to_string(N));
+    TBN_LOG_DEBUG("Padded: m=" + std::to_string(dims.m_padded) +
+                  " k=" + std::to_string(dims.k_padded) + " n=" + std::to_string(dims.n_padded));
 
     // Pad matrices if needed
     Tensor a_padded = pad_float_matrix(a, dims.m_padded, dims.k_padded);
@@ -202,19 +207,7 @@ Tensor qlinear_matmul_binary_blocked(
         dims.n_padded
     );
 
-    // Create tiling parameters based on matrix size
-    TilingParams params = TilingParams::default_128x128();
-
-    // Adjust for larger matrices
-    if (dims.m_padded >= 256 || dims.n_padded >= 256) {
-        params.mblk = 128;
-        params.nblk = 128;
-        params.kblk = 128;
-        params.mmk = 32;
-        params.nmk = 32;
-    }
-
-    // Run GeMM
+    // Run GeMM with provided tiling parameters
     GemmEngine engine;
     Int32Matrix result = engine.compute(a_packed.view(), b_packed.view(), params);
 
@@ -237,7 +230,8 @@ Tensor qlinear_matmul_binary_blocked(
 Tensor qlinear_matmul_binary(
     const Tensor& a,
     const Tensor& b_binary,
-    float scale
+    float scale,
+    const TilingParams& params
 ) {
     TBN_LOG_DEBUG("qlinear_matmul_binary: a_shape=" + shape_to_string(a.shape()) +
                   " b_shape=" + shape_to_string(b_binary.shape()) +
@@ -267,17 +261,8 @@ Tensor qlinear_matmul_binary(
             ") != B rows (" + std::to_string(K_b) + ")");
     }
 
-    // Use blocked GeMM with NEON-optimized popcount for ternary-binary multiplication
-    // Float activations are quantized to ternary {-1, 0, +1} for bit-packing
-    bool use_blocked = true;  // Enable NEON-optimized blocked GeMM
-
-    if (use_blocked) {
-        TBN_LOG_DEBUG("Using blocked GeMM implementation");
-        return qlinear_matmul_binary_blocked(a, b_binary, scale);
-    } else {
-        TBN_LOG_DEBUG("Using naive implementation (small matrix)");
-        return qlinear_matmul_binary_naive(a, b_binary, scale);
-    }
+    TBN_LOG_DEBUG("Using blocked GeMM implementation");
+    return qlinear_matmul_binary_blocked(a, b_binary, scale, params);
 }
 
 // ============================================================================
@@ -288,7 +273,8 @@ Tensor qlinear_matmul_binary(
 Tensor qlinear_matmul_ternary(
     const Tensor& a,
     const Tensor& b_ternary,
-    float scale
+    float scale,
+    const TilingParams& params
 ) {
     TBN_LOG_DEBUG("qlinear_matmul_ternary: a_shape=" + shape_to_string(a.shape()) +
                   " b_shape=" + shape_to_string(b_ternary.shape()));
@@ -315,7 +301,7 @@ Tensor qlinear_matmul_ternary(
     }
 
     // Use binary path
-    return qlinear_matmul_binary(a, b_binary, scale);
+    return qlinear_matmul_binary(a, b_binary, scale, params);
 }
 
 // ============================================================================

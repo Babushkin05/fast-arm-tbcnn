@@ -6,7 +6,33 @@
 #include "../utils/logging.hpp"
 #include "../memory/packed_weights.hpp"
 
+// Include TilingParams from GeMM engine
+#include "../../../../GeMM/05-final/GeMM.hpp"
+
 namespace tbn {
+
+// Predefined tiling parameters for different devices
+namespace device_params {
+    // Raspberry Pi 4: L1=32KB, L2=1MB
+    constexpr TilingParams raspberry_pi() {
+        return {.mblk = 128, .nblk = 256, .kblk = 256, .mmk = 16, .nmk = 8};
+    }
+
+    // Samsung A52: L1=64KB, L2=512KB
+    constexpr TilingParams samsung_a52() {
+        return {.mblk = 64, .nblk = 128, .kblk = 256, .mmk = 16, .nmk = 8};
+    }
+
+    // Apple M4 Pro: L1=128KB, L2=4MB
+    constexpr TilingParams m4_pro() {
+        return {.mblk = 256, .nblk = 512, .kblk = 512, .mmk = 16, .nmk = 8};
+    }
+
+    // Default (optimized for embedded/low-power devices)
+    constexpr TilingParams default_device() {
+        return raspberry_pi();
+    }
+}
 
 /**
  * @brief ONNX QLinearMatMul operator implementation
@@ -36,12 +62,14 @@ Tensor qlinear_matmul(const Tensor& a, const Tensor& a_scale, const Tensor& a_ze
 // Ternary-weight quantized MatMul (ternary weights, float input)
 Tensor qlinear_matmul_ternary(const Tensor& a,
                              const Tensor& b_ternary,
-                             float b_scale);
+                             float b_scale,
+                             const TilingParams& params = device_params::default_device());
 
 // Binary-weight quantized MatMul (binary weights, float input)
 Tensor qlinear_matmul_binary(const Tensor& a,
                             const Tensor& b_binary,
-                            float b_scale);
+                            float b_scale,
+                            const TilingParams& params = device_params::default_device());
 
 // Quantize any tensor to binary weights
 // Used when loading ONNX models with non-binary weights

@@ -101,9 +101,10 @@ struct PaddedDimensions {
         // GeMM requirements:
         // - TernaryMatrix: rows multiple of 8, cols multiple of 64
         // - BinaryMatrix: rows multiple of 64, cols multiple of 8
-        m_padded = ((m + 7) / 8) * 8;
-        n_padded = ((n + 63) / 64) * 64;
-        k_padded = ((k + 7) / 8) * 8;
+        // - TilingParams: n multiple of 128, m multiple of mmk (16), k multiple of nmk (8)
+        m_padded = ((m + 15) / 16) * 16;    // multiple of 16 (mmk)
+        k_padded = ((k + 63) / 64) * 64;    // multiple of 64 (TernaryMatrix cols, BinaryMatrix rows)
+        n_padded = ((n + 127) / 128) * 128; // multiple of 128 (TilingParams n)
     }
 };
 
@@ -207,6 +208,11 @@ Tensor gemm_ternary_binary_optimized(
 
     // Calculate padded dimensions
     PaddedDimensions dims(M, N, K);
+
+    TBN_LOG_DEBUG("gemm_ternary_binary_optimized: M=" + std::to_string(M) +
+                  " K=" + std::to_string(K) + " N=" + std::to_string(N));
+    TBN_LOG_DEBUG("Padded: m=" + std::to_string(dims.m_padded) +
+                  " k=" + std::to_string(dims.k_padded) + " n=" + std::to_string(dims.n_padded));
 
     // Convert and pad A (ternary activations)
     std::vector<int8_t> a_data;

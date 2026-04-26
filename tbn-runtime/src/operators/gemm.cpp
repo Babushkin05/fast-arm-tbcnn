@@ -98,13 +98,17 @@ struct PaddedDimensions {
 
     PaddedDimensions(uint32_t m_, uint32_t n_, uint32_t k_)
         : m(m_), n(n_), k(k_) {
-        // GeMM requirements:
+        // GeMM.cpp expects:
+        // - m (A.rows): multiple of mmk (16)
+        // - n (A.cols = our k): multiple of 128 for NEON
+        // - k (B.cols = our n): multiple of nmk (8)
+        //
+        // Also TernaryMatrix/BinaryMatrix requirements:
         // - TernaryMatrix: rows multiple of 8, cols multiple of 64
         // - BinaryMatrix: rows multiple of 64, cols multiple of 8
-        // - TilingParams: n multiple of 128, m multiple of mmk (16), k multiple of nmk (8)
-        m_padded = ((m + 15) / 16) * 16;    // multiple of 16 (mmk)
-        k_padded = ((k + 63) / 64) * 64;    // multiple of 64 (TernaryMatrix cols, BinaryMatrix rows)
-        n_padded = ((n + 127) / 128) * 128; // multiple of 128 (TilingParams n)
+        m_padded = ((m + 15) / 16) * 16;     // multiple of 16 (mmk)
+        k_padded = ((k + 127) / 128) * 128;  // multiple of 128 (GeMM's "n" requirement)
+        n_padded = ((n + 7) / 8) * 8;        // multiple of 8 (nmk and BinaryMatrix cols)
     }
 };
 
@@ -273,8 +277,15 @@ Tensor gemm_ternary_binary_optimized(
         dims.k_padded, dims.n_padded
     );
 
-    // Run optimized GeMM
-    ::tbn::TilingParams params = ::tbn::TilingParams::default_128x128();
+    // Run optimized GeMM with Raspberry Pi optimized tiling params
+    // mmk=16, nmk=8, kblk=256, mblk=128, nblk=256
+    ::tbn::TilingParams params = {
+        .mblk = 128,
+        .nblk = 256,
+        .kblk = 256,
+        .mmk = 16,
+        .nmk = 8
+    };
     ::tbn::GemmEngine engine;
     ::tbn::Int32Matrix result = engine.compute(a_packed.view(), b_packed.view(), params);
 

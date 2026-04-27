@@ -68,6 +68,49 @@ TernaryMatrix TernaryMatrix::pack(
     return TernaryMatrix(std::move(positive), std::move(negative), rows, cols);
 }
 
+TernaryMatrix TernaryMatrix::pack_from_float(
+    const float* __restrict__ data,
+    std::uint32_t rows,
+    std::uint32_t cols,
+    float threshold_low,
+    float threshold_high
+) {
+    if (rows % 8 != 0) {
+        throw std::invalid_argument("TernaryMatrix: rows must be multiple of 8");
+    }
+    if (cols % 64 != 0) {
+        throw std::invalid_argument("TernaryMatrix: cols must be multiple of 64");
+    }
+
+    const std::uint32_t rowBytes = cols / 8;
+    const std::size_t totalBytes = static_cast<std::size_t>(rows) * rowBytes;
+
+    std::vector<std::uint8_t> positive(totalBytes, 0);
+    std::vector<std::uint8_t> negative(totalBytes, 0);
+
+    // Fused: quantize float -> ternary AND pack into bit-planes in one pass
+    for (std::uint32_t i = 0; i < rows; ++i) {
+        auto* rowP = positive.data() + i * rowBytes;
+        auto* rowM = negative.data() + i * rowBytes;
+        const float* rowData = data + i * cols;
+
+        for (std::uint32_t j = 0; j < cols; ++j) {
+            const float v = rowData[j];
+            const std::uint32_t byteIdx = j / 8;
+            const std::uint8_t bit = static_cast<std::uint8_t>(1u << (j & 7));
+
+            if (v < threshold_low) {
+                rowM[byteIdx] |= bit;  // -1
+            } else if (v > threshold_high) {
+                rowP[byteIdx] |= bit;  // +1
+            }
+            // else: 0, both bits remain 0
+        }
+    }
+
+    return TernaryMatrix(std::move(positive), std::move(negative), rows, cols);
+}
+
 BinaryMatrix BinaryMatrix::pack(
     std::span<const std::int8_t> data,
     std::uint32_t rows,
@@ -126,7 +169,6 @@ inline void MicrokernelTBN_NEON(
 ) noexcept {
     const std::uint32_t rowBytesAblk = keff / 8;
     const std::uint32_t colBytesBblk = keff / 8;
-    const std::uint32_t chunks64 = rowBytesAblk / 8;  // Process 64 bits at a time
 
     for (std::uint32_t r = 0; r < mmk; ++r) {
         const std::uint8_t* __restrict__ ArowP = AblockP + r * rowBytesAblk;
@@ -138,20 +180,71 @@ inline void MicrokernelTBN_NEON(
             int posCount = 0;
             int negCount = 0;
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // NEON path: process 128 bits (16 bytes) at a time using SIMD
+            const std::uint8_t* __restrict__ ap = ArowP;
+            const std::uint8_t* __restrict__ am = ArowM;
+            const std::uint8_t* __restrict__ bc = Bcol;
+
+            // Accumulators for popcount across chunks
+            uint8x16_t posAcc = vdupq_n_u8(0);
+            uint8x16_t negAcc = vdupq_n_u8(0);
+
+            std::uint32_t chunks128 = rowBytesAblk / 16;
+            for (std::uint32_t w = 0; w < chunks128; ++w) {
+                // Load 128 bits from each bit-plane
+                uint8x16_t vAp = vld1q_u8(ap + w * 16);
+                uint8x16_t vAm = vld1q_u8(am + w * 16);
+                uint8x16_t vBc = vld1q_u8(bc + w * 16);
+
+                // Ternary logic: pos = (ap | bc) & (am | ~bc), neg = (ap | ~bc) & (am | bc)
+                uint8x16_t vNotBc = vmvnq_u8(vBc);
+                uint8x16_t posMask = vandq_u8(vorrq_u8(vAp, vBc), vorrq_u8(vAm, vNotBc));
+                uint8x16_t negMask = vandq_u8(vorrq_u8(vAp, vNotBc), vorrq_u8(vAm, vBc));
+
+                // Hardware popcount per byte: vcntq_u8
+                posAcc = vaddq_u8(posAcc, vcntq_u8(posMask));
+                negAcc = vaddq_u8(negAcc, vcntq_u8(negMask));
+            }
+
+            // Horizontal add across the accumulator vectors
+            posCount += vaddlvq_u8(posAcc);
+            negCount += vaddlvq_u8(negAcc);
+
+            // Handle remainder (less than 16 bytes) with scalar path
+            std::uint32_t processed128 = chunks128 * 16;
+            std::uint32_t remaining = rowBytesAblk - processed128;
+            if (remaining > 0) {
+                const std::uint8_t* __restrict__ ap_rem = ArowP + processed128;
+                const std::uint8_t* __restrict__ am_rem = ArowM + processed128;
+                const std::uint8_t* __restrict__ bc_rem = Bcol + processed128;
+
+                std::uint64_t ap64 = 0, am64 = 0, bc64 = 0;
+                std::memcpy(&ap64, ap_rem, remaining);
+                std::memcpy(&am64, am_rem, remaining);
+                std::memcpy(&bc64, bc_rem, remaining);
+
+                std::uint64_t posMask = (ap64 | bc64) & (am64 | ~bc64);
+                std::uint64_t negMask = (ap64 | ~bc64) & (am64 | bc64);
+
+                posCount += std::popcount(posMask);
+                negCount += std::popcount(negMask);
+            }
+#else
+            // Scalar fallback: process 64 bits at a time
+            const std::uint32_t chunks64 = rowBytesAblk / 8;
             for (std::uint32_t w = 0; w < chunks64; ++w) {
-                // Scalar 64-bit loads (direct to GPR, no NEON overhead)
                 const std::uint64_t ap = load_u64(ArowP + w * 8);
                 const std::uint64_t am = load_u64(ArowM + w * 8);
                 const std::uint64_t bc = load_u64(Bcol  + w * 8);
 
-                // Scalar bitwise operations (very fast on modern CPUs)
                 const std::uint64_t posMask = (ap | bc) & (am | ~bc);
                 const std::uint64_t negMask = (ap | ~bc) & (am | bc);
 
-                // Hardware popcount (single instruction)
                 posCount += std::popcount(posMask);
                 negCount += std::popcount(negMask);
             }
+#endif
 
             Ctile[r * CtileStride + c] += (posCount - negCount);
         }
@@ -267,6 +360,41 @@ Int32Matrix GemmEngine::compute(
 
     last_flops_ = static_cast<std::uint64_t>(m) * n * k * 2;
     return C;
+}
+
+// ============================================================================
+// Pre-packed weights implementation
+// ============================================================================
+
+PackedBinaryWeights PackedBinaryWeights::from_int8(
+    std::span<const std::int8_t> weights,
+    std::uint32_t rows_raw,
+    std::uint32_t cols_raw,
+    const TilingParams& tiling
+) {
+    // Pad rows to multiple of 64 (BinaryMatrix requirement) and cols to multiple of 8
+    std::uint32_t rows_padded = ((rows_raw + 63) / 64) * 64;
+    std::uint32_t cols_padded = ((cols_raw + 7) / 8) * 8;
+
+    // Pad weight data
+    std::vector<std::int8_t> padded(static_cast<std::size_t>(rows_padded) * cols_padded, static_cast<std::int8_t>(1));
+    for (std::uint32_t i = 0; i < rows_raw; ++i) {
+        for (std::uint32_t j = 0; j < cols_raw; ++j) {
+            padded[i * cols_padded + j] = weights[i * cols_raw + j];
+        }
+    }
+
+    PackedBinaryWeights result;
+    result.b_packed = BinaryMatrix::pack(
+        std::span<const std::int8_t>(padded.data(), padded.size()),
+        rows_padded, cols_padded
+    );
+    result.tiling = tiling;
+    result.original_m = rows_raw;
+    result.original_n = cols_raw;
+    result.original_k = rows_raw;  // stored as m,n for GEMM
+
+    return result;
 }
 
 } // namespace tbn

@@ -13,6 +13,10 @@
 #include <cmath>
 #include <span>
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 namespace tbn {
 
 // ============================================================================
@@ -72,11 +76,48 @@ Tensor gemm_float_blocked(const Tensor& A, const Tensor& B, const Tensor* C,
                 for (int64_t i = i0; i < i1; ++i) {
                     for (int64_t j = j0; j < j1; ++j) {
                         float sum = 0.0f;
+#if defined(__ARM_NEON) || defined(__aarch64__)
+                        // NEON 4-wide fused multiply-add
+                        float32x4_t vsum = vdupq_n_f32(0.0f);
+                        int64_t k = k0;
+
+                        if (transB) {
+                            // transB=true: B is [N, K], B_data[j*K + k] is contiguous in k
+                            for (; k + 3 < k1; k += 4) {
+                                int64_t a_idx0 = transA ? (k * M + i) : (i * K + k);
+                                float32x4_t va = vld1q_f32(A_data + a_idx0);
+                                float32x4_t vb = vld1q_f32(B_data + j * K + k);
+                                vsum = vfmaq_f32(vsum, va, vb);
+                            }
+                        } else {
+                            // transB=false: B is [K, N], B_data[k*N + j] is strided by N
+                            for (; k + 3 < k1; k += 4) {
+                                int64_t a_idx0 = transA ? (k * M + i) : (i * K + k);
+                                float32x4_t va = vld1q_f32(A_data + a_idx0);
+                                // Gather strided elements from B
+                                float32x4_t vb;
+                                vb = vsetq_lane_f32(B_data[k * N + j], vb, 0);
+                                vb = vsetq_lane_f32(B_data[(k + 1) * N + j], vb, 1);
+                                vb = vsetq_lane_f32(B_data[(k + 2) * N + j], vb, 2);
+                                vb = vsetq_lane_f32(B_data[(k + 3) * N + j], vb, 3);
+                                vsum = vfmaq_f32(vsum, va, vb);
+                            }
+                        }
+                        sum += vaddvq_f32(vsum);
+
+                        // Remainder
+                        for (; k < k1; ++k) {
+                            int64_t a_idx = transA ? (k * M + i) : (i * K + k);
+                            int64_t b_idx = transB ? (j * K + k) : (k * N + j);
+                            sum += A_data[a_idx] * B_data[b_idx];
+                        }
+#else
                         for (int64_t k = k0; k < k1; ++k) {
                             int64_t a_idx = transA ? (k * M + i) : (i * K + k);
                             int64_t b_idx = transB ? (j * K + k) : (k * N + j);
                             sum += A_data[a_idx] * B_data[b_idx];
                         }
+#endif
                         result_data[i * N + j] += alpha * sum;
                     }
                 }

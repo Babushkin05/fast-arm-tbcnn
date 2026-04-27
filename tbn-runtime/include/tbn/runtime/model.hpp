@@ -8,6 +8,7 @@
 #include "../operators/conv2d.hpp"
 #include "../operators/quantized_gemm.hpp"
 #include "../operators/pooling.hpp"
+#include "../../../../GeMM/05-final/GeMM.hpp"
 #include <memory>
 #include <unordered_map>
 #include <string>
@@ -123,6 +124,39 @@ public:
         std::unordered_map<std::string, Tensor> intermediate_tensors_;
         bool use_quantization_ = false;  // Enable binary weight quantization
 
+        // Weight pre-packing caches (Phase 1: avoid per-inference packing)
+        // Key: weight initializer name (W_name from node)
+        // For pre-packed binary weights (pre-converted to BinaryMatrix)
+        struct CachedBinaryWeights {
+            BinaryMatrix b_packed;
+            TilingParams tiling;
+            std::uint32_t original_k{};
+            std::uint32_t original_n{};
+        };
+        std::unordered_map<std::string, CachedBinaryWeights> cached_binary_weights_;
+
+        // Cache for the "already_binary" check per weight tensor
+        struct CachedChannelScales {
+            std::vector<float> scales;
+            bool already_binary{};
+        };
+        std::unordered_map<std::string, CachedChannelScales> cached_channel_scales_;
+
+        // Cache for extracted binary weight tensors (avoid per-inference extraction)
+        std::unordered_map<std::string, Tensor> cached_binary_tensors_;
+
+        // Cache for pre-packed BinaryMatrix (avoids per-inference int8 conversion + packing)
+        struct CachedPackedBinaryMatrix {
+            BinaryMatrix matrix;
+            uint32_t n_orig;     // original N (unpadded)
+            TilingParams tiling;
+        };
+        std::unordered_map<std::string, CachedPackedBinaryMatrix> cached_packed_b_;
+
+        // Pre-allocated buffers reused across inference (Phase 6)
+        std::vector<std::uint8_t> im2col_buffer_;
+        std::vector<float> packed_activation_buffer_;
+
     public:
         Session(std::shared_ptr<ModelGraph> graph) : graph_(graph) {}
 
@@ -194,7 +228,7 @@ public:
 
     private:
         void execute_node(const ModelNode& node) {
-            TBN_LOG_INFO("Executing node: " + node.name + " (" + node.op_type + ")");
+            TBN_LOG_DEBUG("Executing node: " + node.name + " (" + node.op_type + ")");
 
             // Map ONNX operators to implementations
             if (node.op_type == "Conv") {
@@ -324,85 +358,195 @@ public:
             if (params.groups == 1) {
                 // Check weight type and use optimized path when possible
                 if (W.dtype() == DataType::BINARY) {
-                    // Already binary - use optimized Conv2D
                     TBN_LOG_DEBUG("Conv: using optimized binary path");
                     result = conv2d_binary(X, W, B, params);
                 } else if (W.dtype() == DataType::TERNARY) {
-                    // Ternary weights - convert and use optimized path
                     TBN_LOG_DEBUG("Conv: using optimized ternary path");
                     result = conv2d_ternary(X, W, B, params);
                 } else if (W.dtype() == DataType::FLOAT32) {
-                    // Float weights - check if quantization is enabled
                     if (use_quantization_) {
-                        // Check if weights are already binary-like (with per-channel scaling)
-                        // If so, don't re-quantize - just use float path
-                        // Binary-like weights have values clustered around {-scale, +scale}
-                        const float* w_data = W.typed_data<float>();
-                        int64_t n_elems = W.num_elements();
-                        int64_t n_dims = W.shape().dims.size();
-                        int64_t n_channels = W.shape().dims[0];  // First dim is output channels
+                        // Check cache for already_binary computation (Phase 1: skip per-inference detection)
+                        auto cache_it = cached_channel_scales_.find(W_name);
+                        if (cache_it == cached_channel_scales_.end()) {
+                            // First inference: compute per-channel scales and check if binary
+                            const float* w_data = W.typed_data<float>();
+                            int64_t n_elems = W.num_elements();
+                            int64_t n_channels = W.shape().dims[0];
+                            int64_t elems_per_channel = n_elems / n_channels;
 
-                        // Compute per-channel mean of absolute values
-                        std::vector<float> channel_scales(n_channels, 0.0f);
-                        int64_t elems_per_channel = n_elems / n_channels;
-
-                        for (int64_t c = 0; c < n_channels; ++c) {
-                            float sum = 0.0f;
-                            for (int64_t i = 0; i < elems_per_channel; ++i) {
-                                sum += std::abs(w_data[c * elems_per_channel + i]);
-                            }
-                            channel_scales[c] = sum / elems_per_channel;
-                        }
-
-                        // Check if weights are already binary (high ratio of values near ±scale)
-                        bool already_binary = true;
-                        for (int64_t c = 0; c < n_channels && already_binary; ++c) {
-                            float scale = channel_scales[c];
-                            int64_t near_scale_count = 0;
-                            for (int64_t i = 0; i < elems_per_channel; ++i) {
-                                float val = w_data[c * elems_per_channel + i];
-                                float expected = (val >= 0) ? scale : -scale;
-                                if (std::abs(val - expected) < 0.01f * scale || std::abs(val) < 0.01f) {
-                                    near_scale_count++;
-                                }
-                            }
-                            if (near_scale_count < elems_per_channel * 0.9f) {
-                                already_binary = false;
-                            }
-                        }
-
-                        if (already_binary) {
-                            // Weights are already binary with per-channel scaling
-                            // Extract binary signs and use optimized path
-                            TBN_LOG_DEBUG("Conv: extracting binary weights for optimized path");
-
-                            // Create binary weight tensor with extracted signs
-                            Tensor binary_W(W.shape(), DataType::BINARY);
-                            BinaryWeight* bw_data = binary_W.typed_data<BinaryWeight>();
+                            CachedChannelScales cached;
+                            cached.scales.resize(n_channels);
 
                             for (int64_t c = 0; c < n_channels; ++c) {
-                                float scale = channel_scales[c];
+                                float sum = 0.0f;
+                                for (int64_t i = 0; i < elems_per_channel; ++i) {
+                                    sum += std::abs(w_data[c * elems_per_channel + i]);
+                                }
+                                cached.scales[c] = sum / elems_per_channel;
+                            }
+
+                            cached.already_binary = true;
+                            for (int64_t c = 0; c < n_channels && cached.already_binary; ++c) {
+                                float scale = cached.scales[c];
+                                int64_t near_scale_count = 0;
                                 for (int64_t i = 0; i < elems_per_channel; ++i) {
                                     float val = w_data[c * elems_per_channel + i];
-                                    // Extract sign: positive -> BINARY_ONE, negative -> BINARY_ZERO
-                                    bw_data[c * elems_per_channel + i] = (val >= 0) ? BINARY_ONE : BINARY_ZERO;
+                                    float expected = (val >= 0) ? scale : -scale;
+                                    if (std::abs(val - expected) < 0.01f * scale || std::abs(val) < 0.01f) {
+                                        near_scale_count++;
+                                    }
+                                }
+                                if (near_scale_count < elems_per_channel * 0.9f) {
+                                    cached.already_binary = false;
+                                }
+                            }
+                            cache_it = cached_channel_scales_.emplace(W_name, std::move(cached)).first;
+                        }
+
+                        if (cache_it->second.already_binary) {
+                            TBN_LOG_DEBUG("Conv: extracting binary weights (cached)");
+
+                            // Check if we already have the extracted binary tensor cached
+                            auto bin_it = cached_binary_tensors_.find(W_name);
+                            const Tensor* binary_W_ptr;
+                            if (bin_it != cached_binary_tensors_.end()) {
+                                binary_W_ptr = &bin_it->second;
+                            } else {
+                                // First time: extract binary signs into a tensor
+                                Tensor binary_W(W.shape(), DataType::BINARY);
+                                BinaryWeight* bw_data = binary_W.typed_data<BinaryWeight>();
+                                const float* w_data = W.typed_data<float>();
+                                int64_t n_channels = W.shape().dims[0];
+                                int64_t elems_per_channel = W.num_elements() / n_channels;
+
+                                for (int64_t c = 0; c < n_channels; ++c) {
+                                    for (int64_t i = 0; i < elems_per_channel; ++i) {
+                                        bw_data[c * elems_per_channel + i] =
+                                            (w_data[c * elems_per_channel + i] >= 0) ? BINARY_ONE : BINARY_ZERO;
+                                    }
+                                }
+                                bin_it = cached_binary_tensors_.emplace(W_name, std::move(binary_W)).first;
+                                binary_W_ptr = &bin_it->second;
+                            }
+
+                            // Get weight dimensions for im2col + GEMM
+                            const auto& w4d_shape = binary_W_ptr->shape();
+                            int64_t M_out = w4d_shape.dims[0];
+                            int64_t C_in = w4d_shape.dims[1];
+                            int64_t kH_conv = w4d_shape.dims[2];
+                            int64_t kW_conv = w4d_shape.dims[3];
+                            int64_t K_conv = C_in * kH_conv * kW_conv;
+
+                            // im2col: [N, C, H, W] -> [N*OH*OW, C*kH*kW]
+                            Tensor col = impl::im2col(X, kH_conv, kW_conv,
+                                                       params.stride_h, params.stride_w,
+                                                       params.pad_h, params.pad_w,
+                                                       params.dilation_h, params.dilation_w);
+
+                            // Output dims
+                            const auto& x_shape = X.shape();
+                            int64_t N_batch = x_shape.dims[0];
+                            int64_t H_in = x_shape.dims[2];
+                            int64_t W_in = x_shape.dims[3];
+                            int64_t out_h = (H_in + 2*params.pad_h - params.dilation_h*(kH_conv-1) - 1) / params.stride_h + 1;
+                            int64_t out_w = (W_in + 2*params.pad_w - params.dilation_w*(kW_conv-1) - 1) / params.stride_w + 1;
+
+                            // Get or create transposed+packed BinaryMatrix (cache key: W_name + "_t")
+                            std::string packed_key = W_name + "_t";
+                            auto packed_it = cached_packed_b_.find(packed_key);
+                            if (packed_it == cached_packed_b_.end()) {
+                                // Reshape 4D [M,C,kH,kW] -> 2D [M,K], transpose to [K,M], pack
+                                uint32_t k_padded = ((static_cast<uint32_t>(K_conv) + 127) / 128) * 128;
+                                uint32_t n_padded = ((static_cast<uint32_t>(M_out) + 7) / 8) * 8;
+
+                                std::vector<int8_t> b_int8(static_cast<size_t>(k_padded) * n_padded, 1);
+                                const BinaryWeight* w_bin_data = binary_W_ptr->typed_data<BinaryWeight>();
+                                for (int64_t m = 0; m < M_out; ++m) {
+                                    for (int64_t k = 0; k < K_conv; ++k) {
+                                        // w_bin_data[m*K + k] -> transposed: b_int8[k * n_padded + m]
+                                        b_int8[k * n_padded + m] =
+                                            (w_bin_data[m * K_conv + k] == BINARY_ONE) ? +1 : -1;
+                                    }
+                                }
+
+                                CachedPackedBinaryMatrix entry;
+                                entry.matrix = BinaryMatrix::pack(
+                                    std::span<const int8_t>(b_int8.data(), b_int8.size()),
+                                    k_padded, n_padded);
+                                entry.n_orig = static_cast<uint32_t>(M_out);
+                                entry.tiling = device_params::default_device();
+                                packed_it = cached_packed_b_.emplace(packed_key, std::move(entry)).first;
+                            }
+
+                            // GEMM with pre-packed bina<｜end▁of▁thinking｜> weights: col [N*OH*OW, K] @ packed_W [K, M]
+                            Tensor result_2d = qlinear_matmul_binary_blocked_packed(
+                                col, packed_it->second.matrix, packed_it->second.n_orig,
+                                1.0f, packed_it->second.tiling);
+
+                            // Reshape to 4D [N, M, OH, OW]
+                            Shape out4d_shape{N_batch, M_out, out_h, out_w};
+                            Tensor result_tensor(out4d_shape, DataType::FLOAT32);
+                            {
+                                const float* src = result_2d.typed_data<float>();
+                                float* dst = result_tensor.typed_data<float>();
+                                for (int64_t n = 0; n < N_batch; ++n) {
+                                    for (int64_t m = 0; m < M_out; ++m) {
+                                        for (int64_t oh = 0; oh < out_h; ++oh) {
+                                            for (int64_t ow = 0; ow < out_w; ++ow) {
+                                                dst[((n * M_out + m) * out_h + oh) * out_w + ow] =
+                                                    src[((n * out_h + oh) * out_w + ow) * M_out + m];
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
-                            // Use optimized binary conv with per-channel scales
-                            result = conv2d_binary_with_scales(X, binary_W, B, params, channel_scales);
+                            // Add bias
+                            if (B) {
+                                const float* bias_data = B->typed_data<float>();
+                                float* out_data = result_tensor.typed_data<float>();
+                                for (int64_t n = 0; n < N_batch; ++n) {
+                                    for (int64_t m = 0; m < M_out; ++m) {
+                                        float bv = bias_data[m];
+                                        for (int64_t oh = 0; oh < out_h; ++oh) {
+                                            for (int64_t ow = 0; ow < out_w; ++ow) {
+                                                int64_t idx = ((n * M_out + m) * out_h + oh) * out_w + ow;
+                                                out_data[idx] += bv;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Apply per-channel scales
+                            {
+                                const auto& scales = cache_it->second.scales;
+                                float* out_data = result_tensor.typed_data<float>();
+                                for (int64_t n = 0; n < N_batch; ++n) {
+                                    for (int64_t m = 0; m < M_out; ++m) {
+                                        float s = scales[m];
+                                        if (s != 1.0f) {
+                                            for (int64_t oh = 0; oh < out_h; ++oh) {
+                                                for (int64_t ow = 0; ow < out_w; ++ow) {
+                                                    int64_t idx = ((n * M_out + m) * out_h + oh) * out_w + ow;
+                                                    out_data[idx] *= s;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            result = result_tensor;
                         } else {
-                            // Quantize to binary for optimized inference
                             TBN_LOG_DEBUG("Conv: quantizing float weights to binary");
                             Tensor binary_W = quantize_to_binary(W);
                             result = conv2d_binary(X, binary_W, B, params);
                         }
                     } else {
-                        // Use standard float path
                         result = conv2d(X, W, B, params);
                     }
                 } else {
-                    // Fallback to naive implementation
                     result = conv2d(X, W, B, params);
                 }
             } else {
@@ -598,26 +742,82 @@ public:
 
             // Check if quantization is enabled and weights are suitable
             if (use_quantization_ && B.dtype() == DataType::FLOAT32 && !transA && !transB) {
-                // Check if B (weights) are already binary or can be quantized
-                const float* b_data = B.typed_data<float>();
-                int64_t b_elems = B.num_elements();
-
-                // Quick check: sample some values to see if already binary
-                bool already_binary = true;
-                int64_t sample_step = std::max(int64_t(1), b_elems / 1000);
-                for (int64_t i = 0; i < b_elems && already_binary; i += sample_step) {
-                    float val = b_data[i];
-                    if (val != -1.0f && val != 1.0f && val != 0.0f &&
-                        val != 0.999f && val != -0.999f) {
-                        already_binary = false;
+                // Check cache for already_binary (Phase 1: skip per-inference sampling)
+                auto cache_it = cached_channel_scales_.find(B_name);
+                bool already_binary;
+                if (cache_it != cached_channel_scales_.end()) {
+                    already_binary = true;  // if in cache, it passed the check before
+                } else {
+                    const float* b_data = B.typed_data<float>();
+                    int64_t b_elems = B.num_elements();
+                    already_binary = true;
+                    int64_t sample_step = std::max(int64_t(1), b_elems / 1000);
+                    for (int64_t i = 0; i < b_elems && already_binary; i += sample_step) {
+                        float val = b_data[i];
+                        if (val != -1.0f && val != 1.0f && val != 0.0f &&
+                            val != 0.999f && val != -0.999f) {
+                            already_binary = false;
+                        }
+                    }
+                    if (already_binary) {
+                        CachedChannelScales entry;
+                        entry.already_binary = true;
+                        cached_channel_scales_[B_name] = entry;
                     }
                 }
 
                 if (already_binary) {
-                    TBN_LOG_DEBUG("Gemm: using pre-quantized binary weights");
-                    result = qlinear_matmul_binary(A, B, 1.0f);
+                    TBN_LOG_DEBUG("Gemm: using pre-quantized binary weights (cached)");
+
+                    // Check if we already have the extracted binary tensor cached
+                    auto bin_it = cached_binary_tensors_.find(B_name);
+                    const Tensor* binary_B_ptr;
+                    if (bin_it != cached_binary_tensors_.end()) {
+                        binary_B_ptr = &bin_it->second;
+                    } else {
+                        // First time: extract binary signs into a BINARY tensor
+                        Tensor binary_B(B.shape(), DataType::BINARY);
+                        BinaryWeight* bw_data = binary_B.typed_data<BinaryWeight>();
+                        const float* b_float_data = B.typed_data<float>();
+                        int64_t n_elements = B.num_elements();
+                        for (int64_t i = 0; i < n_elements; ++i) {
+                            bw_data[i] = (b_float_data[i] >= 0) ? BINARY_ONE : BINARY_ZERO;
+                        }
+                        bin_it = cached_binary_tensors_.emplace(B_name, std::move(binary_B)).first;
+                        binary_B_ptr = &bin_it->second;
+                    }
+
+                    // Check for pre-packed BinaryMatrix cache
+                    auto packed_it = cached_packed_b_.find(B_name);
+                    if (packed_it == cached_packed_b_.end()) {
+                        // First time: pack binary weights into GeMM BinaryMatrix
+                        const Tensor& b_bin = *binary_B_ptr;
+                        uint32_t K_w = static_cast<uint32_t>(b_bin.shape().dims[0]);
+                        uint32_t N_w = static_cast<uint32_t>(b_bin.shape().dims[1]);
+                        uint32_t k_padded = ((K_w + 127) / 128) * 128;
+                        uint32_t n_padded = ((N_w + 7) / 8) * 8;
+
+                        std::vector<int8_t> b_int8(static_cast<size_t>(k_padded) * n_padded, 1);
+                        const BinaryWeight* b_data = b_bin.typed_data<BinaryWeight>();
+                        for (uint32_t i = 0; i < K_w; ++i) {
+                            for (uint32_t j = 0; j < N_w; ++j) {
+                                b_int8[i * n_padded + j] = (b_data[i * N_w + j] == BINARY_ONE) ? +1 : -1;
+                            }
+                        }
+
+                        CachedPackedBinaryMatrix entry;
+                        entry.matrix = BinaryMatrix::pack(
+                            std::span<const int8_t>(b_int8.data(), b_int8.size()),
+                            k_padded, n_padded);
+                        entry.n_orig = N_w;
+                        entry.tiling = device_params::default_device();
+                        packed_it = cached_packed_b_.emplace(B_name, std::move(entry)).first;
+                    }
+
+                    result = qlinear_matmul_binary_blocked_packed(
+                        A, packed_it->second.matrix, packed_it->second.n_orig,
+                        1.0f, packed_it->second.tiling);
                 } else {
-                    // Need to quantize on-the-fly
                     TBN_LOG_DEBUG("Gemm: quantizing weights on-the-fly");
                     Tensor binary_B = quantize_to_binary(B);
                     result = qlinear_matmul_binary(A, binary_B, 1.0f);
@@ -676,23 +876,8 @@ public:
 
             // For 2D tensors, use GEMM
             if (A.shape().dims.size() == 2 && B.shape().dims.size() == 2) {
-                TBN_LOG_INFO("MatMul: A=" + shape_to_string(A.shape()) + " B=" + shape_to_string(B.shape()));
-                TBN_LOG_INFO("MatMul A[0:5]: " + std::to_string(A.typed_data<float>()[0]) + ", " +
-                              std::to_string(A.typed_data<float>()[1]) + ", " +
-                              std::to_string(A.typed_data<float>()[2]) + ", " +
-                              std::to_string(A.typed_data<float>()[3]) + ", " +
-                              std::to_string(A.typed_data<float>()[4]));
-                TBN_LOG_INFO("MatMul B[0:5]: " + std::to_string(B.typed_data<float>()[0]) + ", " +
-                              std::to_string(B.typed_data<float>()[1]) + ", " +
-                              std::to_string(B.typed_data<float>()[2]) + ", " +
-                              std::to_string(B.typed_data<float>()[3]) + ", " +
-                              std::to_string(B.typed_data<float>()[4]));
+                TBN_LOG_DEBUG("MatMul: A=" + shape_to_string(A.shape()) + " B=" + shape_to_string(B.shape()));
                 Tensor result = gemm(A, B, nullptr, 1.0f, 0.0f, false, false);
-                TBN_LOG_INFO("MatMul result[0:5]: " + std::to_string(result.typed_data<float>()[0]) + ", " +
-                              std::to_string(result.typed_data<float>()[1]) + ", " +
-                              std::to_string(result.typed_data<float>()[2]) + ", " +
-                              std::to_string(result.typed_data<float>()[3]) + ", " +
-                              std::to_string(result.typed_data<float>()[4]));
                 intermediate_tensors_[node.outputs[0]] = result;
             } else {
                 throw NotImplementedError("MatMul for non-2D tensors not implemented");

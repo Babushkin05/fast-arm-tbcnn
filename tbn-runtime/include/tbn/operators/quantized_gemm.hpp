@@ -78,6 +78,17 @@ Tensor qlinear_matmul_binary_float(const Tensor& a,
                                    float b_scale,
                                    const TilingParams& params = device_params::default_device());
 
+// Blocked GeMM with pre-packed BinaryMatrix (skips B-side int8 conversion + packing)
+// b_packed: pre-packed BinaryMatrix (rows=k_padded, cols=n_padded)
+// n_orig: original N dimension (unpadded output cols)
+Tensor qlinear_matmul_binary_blocked_packed(const Tensor& a,
+                                            const BinaryMatrix& b_packed,
+                                            uint32_t n_orig,
+                                            float scale,
+                                            const TilingParams& params,
+                                            float threshold_low = -0.1f,
+                                            float threshold_high = 0.1f);
+
 // Check if float weights are already binary (all values are -1, 0, or +1)
 bool is_binary_float_weights(const float* data, size_t count);
 

@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
+#include <memory>
 
 #include "tbn/runtime/model.hpp"
 #include "tbn/runtime/tensor.hpp"
@@ -53,6 +54,7 @@ class PyModel {
 public:
     PyModel(const std::string& path) {
         model_ = load_onnx_model(path);
+        session_ = std::make_unique<TBNModel::Session>(model_.create_session());
     }
 
     py::array_t<float> run(py::array_t<float> input, bool use_quantization = false) {
@@ -65,11 +67,10 @@ public:
             throw std::runtime_error("Model has no inputs");
         }
 
-        // Create session and run
-        auto session = model_.create_session();
-        session.set_quantization(use_quantization);  // Enable/disable quantization
-        session.set_input(input_names[0], input_tensor);
-        session.run();
+        // Reuse existing session
+        session_->set_quantization(use_quantization);
+        session_->set_input(input_names[0], input_tensor);
+        session_->run();
 
         // Get output
         const auto& output_names = model_.graph().outputs;
@@ -77,7 +78,7 @@ public:
             throw std::runtime_error("Model has no outputs");
         }
 
-        Tensor output = session.get_output(output_names[0]);
+        Tensor output = session_->get_output(output_names[0]);
         return tensor_to_numpy(output);
     }
 
@@ -104,6 +105,7 @@ public:
 
 private:
     TBNModel model_;
+    std::unique_ptr<TBNModel::Session> session_;
 };
 
 PYBIND11_MODULE(_tbn, m) {

@@ -73,6 +73,16 @@ public:
         std::uint32_t cols
     );
 
+    /// Fused: quantize float directly to packed ternary (no intermediate int8_t buffer)
+    /// threshold_low/high: values in (low, high) become 0, below low become -1, above high become +1
+    [[nodiscard]] static TernaryMatrix pack_from_float(
+        const float* __restrict__ data,
+        std::uint32_t rows,
+        std::uint32_t cols,
+        float threshold_low = -0.1f,
+        float threshold_high = 0.1f
+    );
+
     [[nodiscard]] std::uint32_t rows() const noexcept { return rows_; }
     [[nodiscard]] std::uint32_t cols() const noexcept { return cols_; }
     [[nodiscard]] TernaryMatrixView view() const noexcept {
@@ -157,6 +167,30 @@ private:
     std::vector<std::int32_t> data_;
     std::uint32_t rows_{};
     std::uint32_t cols_{};
+};
+
+// ============================================================================
+// Pre-packed weights — single-shot packing for inference reuse
+// ============================================================================
+
+/// Pre-packed binary weights: owned matrices + tiling parameters
+struct PackedBinaryWeights {
+    TernaryMatrix a_packed;   // if activations are ternary (cache reuses this as template)
+    BinaryMatrix b_packed;    // pre-packed weight matrix
+    TilingParams tiling;
+    std::uint32_t original_m{};
+    std::uint32_t original_n{};
+    std::uint32_t original_k{};
+
+    [[nodiscard]] bool valid() const noexcept { return !b_packed.empty(); }
+
+    /// Pack weights once; returns empty struct on failure
+    [[nodiscard]] static PackedBinaryWeights from_int8(
+        std::span<const std::int8_t> weights,
+        std::uint32_t rows_raw,    // == K
+        std::uint32_t cols_raw,    // == N
+        const TilingParams& tiling
+    );
 };
 
 // ============================================================================

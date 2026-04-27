@@ -265,7 +265,7 @@ Tensor conv2d_binary(const Tensor& input, const Tensor& binary_weights,
     // col: [N*out_h*out_w, C*kH*kW] (float)
     // weights: [M, C*kH*kW] (binary)
     // Need to transpose weights for multiplication: col @ weights^T
-    // But qlinear_matmul_binary expects A[M,K] @ B[K,N]
+    // qlinear_matmul_binary expects A[M,K] @ B[K,N]
     // So we need: col[N*out, K] @ weights[K, M] = output[N*out, M]
 
     // Transpose weights: [M, K] -> [K, M]
@@ -443,24 +443,58 @@ Tensor im2col(const Tensor& input, int64_t kernel_h, int64_t kernel_w,
     float* col_data = col.typed_data<float>();
 
     // Fill column matrix
+    // Optimized: use memcpy for contiguous kernel rows when possible
+    const bool is_contiguous = (stride_h == 1 && stride_w == 1 &&
+                                 pad_h == 0 && pad_w == 0 &&
+                                 dilation_h == 1 && dilation_w == 1);
+    const int64_t row_len = kernel_w * sizeof(float);
+    const int64_t col_cols_bytes = col_cols * sizeof(float);
+
     for (int64_t n = 0; n < N; ++n) {
         for (int64_t oh = 0; oh < out_h; ++oh) {
             for (int64_t ow = 0; ow < out_w; ++ow) {
                 int64_t row_idx = (n * out_h + oh) * out_w + ow;
 
-                for (int64_t c = 0; c < C; ++c) {
-                    for (int64_t kh = 0; kh < kernel_h; ++kh) {
-                        for (int64_t kw = 0; kw < kernel_w; ++kw) {
-                            int64_t ih = oh * stride_h - pad_h + kh * dilation_h;
-                            int64_t iw = ow * stride_w - pad_w + kw * dilation_w;
-
-                            int64_t col_idx = (c * kernel_h + kh) * kernel_w + kw;
-
-                            if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
-                                int64_t in_idx = ((n * C + c) * H + ih) * W + iw;
-                                col_data[row_idx * col_cols + col_idx] = input_data[in_idx];
+                if (is_contiguous) {
+                    // Fast path: kernel windows are contiguous in input memory
+                    // Each kernel row is a contiguous segment of input
+                    for (int64_t c = 0; c < C; ++c) {
+                        float* col_row = col_data + row_idx * col_cols;
+                        for (int64_t kh = 0; kh < kernel_h; ++kh) {
+                            int64_t ih = oh + kh;
+                            int64_t in_base = ((n * C + c) * H + ih) * W + ow;
+                            int64_t col_base = (c * kernel_h + kh) * kernel_w;
+                            if (ih < H && ow + kernel_w <= W) {
+                                std::memcpy(col_row + col_base, input_data + in_base, row_len);
                             } else {
-                                col_data[row_idx * col_cols + col_idx] = 0.0f;  // zero-padding
+                                // Partial copy with bounds checking
+                                for (int64_t kw = 0; kw < kernel_w; ++kw) {
+                                    int64_t iw = ow + kw;
+                                    if (ih < H && iw < W) {
+                                        col_row[col_base + kw] = input_data[in_base + kw];
+                                    } else {
+                                        col_row[col_base + kw] = 0.0f;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // General path with stride/dilation/padding
+                    for (int64_t c = 0; c < C; ++c) {
+                        for (int64_t kh = 0; kh < kernel_h; ++kh) {
+                            for (int64_t kw = 0; kw < kernel_w; ++kw) {
+                                int64_t ih = oh * stride_h - pad_h + kh * dilation_h;
+                                int64_t iw = ow * stride_w - pad_w + kw * dilation_w;
+
+                                int64_t col_idx = (c * kernel_h + kh) * kernel_w + kw;
+
+                                if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
+                                    int64_t in_idx = ((n * C + c) * H + ih) * W + iw;
+                                    col_data[row_idx * col_cols + col_idx] = input_data[in_idx];
+                                } else {
+                                    col_data[row_idx * col_cols + col_idx] = 0.0f;
+                                }
                             }
                         }
                     }

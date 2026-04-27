@@ -185,15 +185,16 @@ Tensor qlinear_matmul_binary_blocked(
     // Pad matrices if needed
     Tensor a_padded = pad_float_matrix(a, dims.m_padded, dims.k_padded);
 
-    // Quantize A to ternary
-    std::vector<int8_t> a_ternary = quantize_float_to_ternary(
+    // Fused: quantize and pack A directly (no intermediate int8_t buffer)
+    TernaryMatrix a_packed = TernaryMatrix::pack_from_float(
         a_padded.typed_data<float>(),
-        static_cast<size_t>(dims.m_padded) * dims.k_padded,
+        dims.m_padded,
+        dims.k_padded,
         threshold_low,
         threshold_high
     );
 
-    // Convert B to int8_t binary format
+    // Convert B to int8_t binary format (still needed for weights, but this is one-time)
     // Need to pad B to (k_padded × n_padded)
     std::vector<int8_t> b_int8(static_cast<size_t>(dims.k_padded) * dims.n_padded, 1);  // default +1
 
@@ -205,13 +206,7 @@ Tensor qlinear_matmul_binary_blocked(
         }
     }
 
-    // Pack matrices for GeMM
-    TernaryMatrix a_packed = TernaryMatrix::pack(
-        std::span<const int8_t>(a_ternary.data(), a_ternary.size()),
-        dims.m_padded,
-        dims.k_padded
-    );
-
+    // Pack B for GeMM
     BinaryMatrix b_packed = BinaryMatrix::pack(
         std::span<const int8_t>(b_int8.data(), b_int8.size()),
         dims.k_padded,
@@ -223,12 +218,90 @@ Tensor qlinear_matmul_binary_blocked(
     Int32Matrix result = engine.compute(a_packed.view(), b_packed.view(), params);
 
     // Extract the valid (non-padded) region and apply scale
+    // Use memcpy for contiguous rows when no padding on N dimension
     Tensor output({M, N}, DataType::FLOAT32);
     float* out_data = output.typed_data<float>();
 
-    for (uint32_t i = 0; i < M; ++i) {
-        for (uint32_t j = 0; j < N; ++j) {
-            out_data[i * N + j] = static_cast<float>(result.at(i, j)) * scale;
+    if (N == dims.n_padded) {
+        // No padding on N — copy rows with memcpy
+        for (uint32_t i = 0; i < M; ++i) {
+            const std::int32_t* src = result.data().data() + i * dims.n_padded;
+            float* dst = out_data + i * N;
+            for (uint32_t j = 0; j < N; ++j) {
+                dst[j] = static_cast<float>(src[j]) * scale;
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < M; ++i) {
+            for (uint32_t j = 0; j < N; ++j) {
+                out_data[i * N + j] = static_cast<float>(result.at(i, j)) * scale;
+            }
+        }
+    }
+
+    return output;
+}
+
+// ============================================================================
+// Blocked GeMM with pre-packed BinaryMatrix (cached weights)
+// Skips the B-side int8 conversion + BinaryMatrix::pack
+// ============================================================================
+Tensor qlinear_matmul_binary_blocked_packed(
+    const Tensor& a,
+    const BinaryMatrix& b_packed,
+    uint32_t n_orig,
+    float scale,
+    const TilingParams& params,
+    float threshold_low,
+    float threshold_high
+) {
+    uint32_t M = static_cast<uint32_t>(a.shape().dims[0]);
+    uint32_t K = static_cast<uint32_t>(a.shape().dims[1]);
+    uint32_t N = n_orig;
+    uint32_t k_padded = b_packed.rows();
+    uint32_t n_padded = b_packed.cols();
+
+    // Compute m_padded (depends on activation, varies per inference)
+    uint32_t m_padded = ((M + 15) / 16) * 16;
+
+    TBN_LOG_DEBUG("qlinear_matmul_binary_blocked_packed: M=" + std::to_string(M) +
+                  " K=" + std::to_string(K) + " N=" + std::to_string(N) +
+                  " (pre-packed B: k_pad=" + std::to_string(k_padded) +
+                  " n_pad=" + std::to_string(n_padded) + ")");
+
+    // Pad and quantize A (activation — still per-inference)
+    Tensor a_padded = pad_float_matrix(a, m_padded, k_padded);
+    TernaryMatrix a_packed = TernaryMatrix::pack_from_float(
+        a_padded.typed_data<float>(),
+        m_padded,
+        k_padded,
+        threshold_low,
+        threshold_high
+    );
+
+    // B is already packed — skip int8 conversion and BinaryMatrix::pack!
+
+    // Run GeMM with pre-packed B
+    GemmEngine engine;
+    Int32Matrix result = engine.compute(a_packed.view(), b_packed.view(), params);
+
+    // Extract the valid (non-padded) region and apply scale
+    Tensor output({M, N}, DataType::FLOAT32);
+    float* out_data = output.typed_data<float>();
+
+    if (N == n_padded) {
+        for (uint32_t i = 0; i < M; ++i) {
+            const std::int32_t* src = result.data().data() + i * n_padded;
+            float* dst = out_data + i * N;
+            for (uint32_t j = 0; j < N; ++j) {
+                dst[j] = static_cast<float>(src[j]) * scale;
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < M; ++i) {
+            for (uint32_t j = 0; j < N; ++j) {
+                out_data[i * N + j] = static_cast<float>(result.at(i, j)) * scale;
+            }
         }
     }
 
@@ -428,7 +501,7 @@ Tensor qlinear_matmul_ternary(
 // Used when loading ONNX models with non-binary weights
 // ============================================================================
 Tensor quantize_to_binary(const Tensor& weights, float threshold) {
-    TBN_LOG_INFO("Quantizing weights to binary with threshold=" + std::to_string(threshold));
+    TBN_LOG_DEBUG("Quantizing weights to binary with threshold=" + std::to_string(threshold));
 
     Tensor binary_weights(weights.shape(), DataType::BINARY);
     BinaryWeight* dst = binary_weights.typed_data<BinaryWeight>();

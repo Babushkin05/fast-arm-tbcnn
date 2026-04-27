@@ -594,7 +594,67 @@ public:
             }
 
             // Call GEMM implementation
-            Tensor result = gemm(A, B, C, alpha, beta, transA, transB);
+            Tensor result;
+
+            // Check if quantization is enabled and weights are suitable
+            if (use_quantization_ && B.dtype() == DataType::FLOAT32 && !transA && !transB) {
+                // Check if B (weights) are already binary or can be quantized
+                const float* b_data = B.typed_data<float>();
+                int64_t b_elems = B.num_elements();
+
+                // Quick check: sample some values to see if already binary
+                bool already_binary = true;
+                int64_t sample_step = std::max(int64_t(1), b_elems / 1000);
+                for (int64_t i = 0; i < b_elems && already_binary; i += sample_step) {
+                    float val = b_data[i];
+                    if (val != -1.0f && val != 1.0f && val != 0.0f &&
+                        val != 0.999f && val != -0.999f) {
+                        already_binary = false;
+                    }
+                }
+
+                if (already_binary) {
+                    TBN_LOG_DEBUG("Gemm: using pre-quantized binary weights");
+                    result = qlinear_matmul_binary(A, B, 1.0f);
+                } else {
+                    // Need to quantize on-the-fly
+                    TBN_LOG_DEBUG("Gemm: quantizing weights on-the-fly");
+                    Tensor binary_B = quantize_to_binary(B);
+                    result = qlinear_matmul_binary(A, binary_B, 1.0f);
+                }
+
+                // Apply alpha and beta
+                if (alpha != 1.0f || (C && beta != 0.0f)) {
+                    float* result_data = result.typed_data<float>();
+                    int64_t M = result.shape().dims[0];
+                    int64_t N = result.shape().dims[1];
+
+                    for (int64_t i = 0; i < M * N; ++i) {
+                        result_data[i] *= alpha;
+                    }
+
+                    if (C && beta != 0.0f) {
+                        const float* C_data = C->typed_data<float>();
+                        bool C_is_1d = C->shape().dims.size() == 1;
+
+                        if (C_is_1d) {
+                            for (int64_t i = 0; i < M; ++i) {
+                                for (int64_t j = 0; j < N; ++j) {
+                                    result_data[i * N + j] += beta * C_data[j];
+                                }
+                            }
+                        } else {
+                            for (int64_t i = 0; i < M * N; ++i) {
+                                result_data[i] += beta * C_data[i];
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Use standard float GEMM
+                result = gemm(A, B, C, alpha, beta, transA, transB);
+            }
+
             intermediate_tensors_[node.outputs[0]] = result;
         }
 

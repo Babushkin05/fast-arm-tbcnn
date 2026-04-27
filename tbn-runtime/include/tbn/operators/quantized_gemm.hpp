@@ -71,6 +71,16 @@ Tensor qlinear_matmul_binary(const Tensor& a,
                             float b_scale,
                             const TilingParams& params = device_params::default_device());
 
+// Optimized path for pre-quantized binary float weights (no re-quantization needed)
+// This function assumes b_binary_float contains only -1.0f, 0.0f, or +1.0f values
+Tensor qlinear_matmul_binary_float(const Tensor& a,
+                                   const Tensor& b_binary_float,
+                                   float b_scale,
+                                   const TilingParams& params = device_params::default_device());
+
+// Check if float weights are already binary (all values are -1, 0, or +1)
+bool is_binary_float_weights(const float* data, size_t count);
+
 // Quantize any tensor to binary weights
 // Used when loading ONNX models with non-binary weights
 Tensor quantize_to_binary(const Tensor& weights, float threshold = 0.0f);

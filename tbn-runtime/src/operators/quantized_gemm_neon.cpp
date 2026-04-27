@@ -12,6 +12,13 @@
 
 namespace tbn {
 
+// Forward declarations
+Tensor qlinear_matmul_binary_float(const Tensor& a, const Tensor& b_binary_float,
+                                   float scale, const TilingParams& params);
+Tensor qlinear_matmul_binary_blocked(const Tensor& a, const Tensor& b_binary,
+                                     float scale, const TilingParams& params,
+                                     float threshold_low, float threshold_high);
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -229,6 +236,31 @@ Tensor qlinear_matmul_binary_blocked(
 }
 
 // ============================================================================
+// Helper: Check if float weights are already binary (all values are -1 or +1)
+// ============================================================================
+bool is_binary_float_weights(const float* data, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        float val = data[i];
+        if (val != -1.0f && val != 1.0f && val != 0.0f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ============================================================================
+// Helper: Convert binary float weights to int8_t directly (no quantization needed)
+// ============================================================================
+std::vector<int8_t> convert_binary_float_to_int8(const float* data, size_t count) {
+    std::vector<int8_t> result(count);
+    for (size_t i = 0; i < count; ++i) {
+        // 0.0f is treated as +1 (or could be -1)
+        result[i] = (data[i] >= 0.0f) ? +1 : -1;
+    }
+    return result;
+}
+
+// ============================================================================
 // Main entry point for binary weights
 // ============================================================================
 Tensor qlinear_matmul_binary(
@@ -244,8 +276,6 @@ Tensor qlinear_matmul_binary(
     // Validate inputs
     TBN_CHECK(a.dtype() == DataType::FLOAT32, InvalidArgumentError,
               "Input A must be FLOAT32, got " + std::to_string(static_cast<int>(a.dtype())));
-    TBN_CHECK(b_binary.dtype() == DataType::BINARY, InvalidArgumentError,
-              "Input B must be BINARY");
 
     const auto& a_shape = a.shape();
     const auto& b_shape = b_binary.shape();
@@ -265,8 +295,93 @@ Tensor qlinear_matmul_binary(
             ") != B rows (" + std::to_string(K_b) + ")");
     }
 
+    // Check if weights are float but already binary
+    if (b_binary.dtype() == DataType::FLOAT32) {
+        const float* b_data = b_binary.typed_data<float>();
+        if (is_binary_float_weights(b_data, b_binary.num_elements())) {
+            TBN_LOG_DEBUG("Detected pre-quantized binary float weights - using optimized path");
+            return qlinear_matmul_binary_float(a, b_binary, scale, params);
+        } else {
+            // Need to quantize float weights to binary
+            TBN_LOG_DEBUG("Quantizing float weights to binary");
+            return qlinear_matmul_binary_blocked(a, b_binary, scale, params);
+        }
+    }
+
+    TBN_CHECK(b_binary.dtype() == DataType::BINARY, InvalidArgumentError,
+              "Input B must be BINARY or FLOAT32 with binary values");
+
     TBN_LOG_DEBUG("Using blocked GeMM implementation");
     return qlinear_matmul_binary_blocked(a, b_binary, scale, params);
+}
+
+// ============================================================================
+// Optimized path for pre-quantized binary float weights (no re-quantization)
+// ============================================================================
+Tensor qlinear_matmul_binary_float(
+    const Tensor& a,
+    const Tensor& b_binary_float,
+    float scale,
+    const TilingParams& params
+) {
+    // This function assumes b_binary_float contains only -1.0f, 0.0f, or +1.0f values
+    // It skips the quantization step entirely
+
+    uint32_t M = static_cast<uint32_t>(a.shape().dims[0]);
+    uint32_t K = static_cast<uint32_t>(a.shape().dims[1]);
+    uint32_t N = static_cast<uint32_t>(b_binary_float.shape().dims[1]);
+
+    PaddedDimensions dims(M, N, K);
+
+    TBN_LOG_DEBUG("qlinear_matmul_binary_float: M=" + std::to_string(M) +
+                  " K=" + std::to_string(K) + " N=" + std::to_string(N));
+
+    // Pad A matrix
+    Tensor a_padded = pad_float_matrix(a, dims.m_padded, dims.k_padded);
+
+    // Quantize activations to ternary (this is still needed)
+    std::vector<int8_t> a_ternary = quantize_float_to_ternary(
+        a_padded.typed_data<float>(),
+        static_cast<size_t>(dims.m_padded) * dims.k_padded
+    );
+
+    // Convert B directly without re-quantization (just type conversion)
+    std::vector<int8_t> b_int8(static_cast<size_t>(dims.k_padded) * dims.n_padded, 1);
+    const float* b_data = b_binary_float.typed_data<float>();
+
+    for (uint32_t i = 0; i < K; ++i) {
+        for (uint32_t j = 0; j < N; ++j) {
+            // Direct conversion: -1.0f -> -1, 0.0f or +1.0f -> +1
+            b_int8[i * dims.n_padded + j] = (b_data[i * N + j] >= 0.0f) ? +1 : -1;
+        }
+    }
+
+    // Pack matrices for GeMM
+    TernaryMatrix a_packed = TernaryMatrix::pack(
+        std::span<const int8_t>(a_ternary.data(), a_ternary.size()),
+        dims.m_padded, dims.k_padded
+    );
+
+    BinaryMatrix b_packed = BinaryMatrix::pack(
+        std::span<const int8_t>(b_int8.data(), b_int8.size()),
+        dims.k_padded, dims.n_padded
+    );
+
+    // Run GeMM
+    GemmEngine engine;
+    Int32Matrix result = engine.compute(a_packed.view(), b_packed.view(), params);
+
+    // Extract valid region
+    Tensor output({M, N}, DataType::FLOAT32);
+    float* out_data = output.typed_data<float>();
+
+    for (uint32_t i = 0; i < M; ++i) {
+        for (uint32_t j = 0; j < N; ++j) {
+            out_data[i * N + j] = static_cast<float>(result.at(i, j)) * scale;
+        }
+    }
+
+    return output;
 }
 
 // ============================================================================

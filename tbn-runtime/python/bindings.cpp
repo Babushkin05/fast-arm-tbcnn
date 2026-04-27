@@ -106,7 +106,7 @@ private:
     TBNModel model_;
 };
 
-PYBIND11_MODULE(tbn, m) {
+PYBIND11_MODULE(_tbn, m) {
     m.doc() = "TBN Runtime - Optimized inference for ternary-binary neural networks";
 
     // Shape class

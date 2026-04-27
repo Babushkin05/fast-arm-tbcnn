@@ -159,6 +159,7 @@ endif()
 # Python Bindings
 # ============================================================================
 if(TBN_BUILD_PYTHON)
+    # Build C++ extension module as _tbn (internal)
     pybind11_add_module(tbn_python python/bindings.cpp)
 
     target_link_libraries(tbn_python PRIVATE tbn)
@@ -173,11 +174,27 @@ if(TBN_BUILD_PYTHON)
         ${ONNX_INCLUDE_DIRS}
     )
 
-    # Set output name to 'tbn' (not 'tbn_python')
+    # Create python package directory structure
+    set(PYTHON_PKG_DIR ${CMAKE_BINARY_DIR}/python/tbn)
+    file(MAKE_DIRECTORY ${PYTHON_PKG_DIR})
+
+    # Set output name to '_tbn' (internal module, imported by __init__.py)
     set_target_properties(tbn_python PROPERTIES
-        OUTPUT_NAME tbn
-        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/python
+        OUTPUT_NAME _tbn
+        LIBRARY_OUTPUT_DIRECTORY ${PYTHON_PKG_DIR}
     )
 
-    message(STATUS "Python module will be built at: ${CMAKE_BINARY_DIR}/python")
+    # Copy Python package files
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/tbn/__init__.py
+        ${PYTHON_PKG_DIR}/__init__.py
+        COPYONLY
+    )
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/tbn/quantization.py
+        ${PYTHON_PKG_DIR}/quantization.py
+        COPYONLY
+    )
+
+    message(STATUS "Python package will be built at: ${CMAKE_BINARY_DIR}/python")
 endif()

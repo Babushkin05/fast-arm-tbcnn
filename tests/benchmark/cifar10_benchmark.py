@@ -5,6 +5,7 @@ CIFAR-10 Benchmark: TBN vs ONNX Runtime
 Compares inference performance with pre-quantized binary weights.
 """
 
+import argparse
 import sys
 import time
 import numpy as np
@@ -99,9 +100,12 @@ def benchmark_onnx(model_path, images, labels, warmup=10, runs=100):
     return np.mean(latencies), np.std(latencies), correct / runs * 100
 
 
-def benchmark_tbn(model_path, images, labels, warmup=10, runs=100, quantized=False):
+def benchmark_tbn(model_path, images, labels, warmup=10, runs=100, quantized=False, tiling=None):
     """TBN benchmark."""
-    model = tbn.load_model(str(model_path))
+    if tiling:
+        tbn.set_tiling(tiling)
+        print(f"  Tiling: {tiling}")
+    model = tbn.load_model(str(model_path), tiling=tiling or "")
 
     # Warmup
     for i in range(warmup):
@@ -134,6 +138,21 @@ def benchmark_tbn(model_path, images, labels, warmup=10, runs=100, quantized=Fal
 
 
 def main():
+    parser = argparse.ArgumentParser(description='CIFAR-10 Benchmark: TBN vs ONNX Runtime')
+    parser.add_argument('--tiling', type=str, default=None,
+                        choices=['raspberry_pi', 'samsung_a52', 'm4_pro', 'default'],
+                        help='Tiling preset for GeMM (default: auto-detect)')
+    parser.add_argument('--runs', type=int, default=100,
+                        help='Number of benchmark runs (default: 100)')
+    parser.add_argument('--samples', type=int, default=100,
+                        help='Number of test images (default: 100)')
+    args = parser.parse_args()
+
+    # Set tiling if specified
+    if args.tiling and args.tiling != 'default':
+        tbn.set_tiling(args.tiling)
+        print(f"Tiling preset: {args.tiling}")
+
     print("=" * 70)
     print("CIFAR-10 Benchmark: TBN vs ONNX Runtime")
     print("=" * 70)
@@ -161,7 +180,7 @@ def main():
 
     # Load data
     print("\nLoading CIFAR-10 test data...")
-    images, labels = load_cifar10_test(100)
+    images, labels = load_cifar10_test(args.samples)
     print(f"Image shape: {images[0].shape}")
 
     # Model info
@@ -172,31 +191,31 @@ def main():
 
     # ONNX Runtime with original model (single-thread)
     print("\n[ONNX Runtime - Original] Benchmarking...")
-    mean, std, acc = benchmark_onnx(original_model, images, labels)
+    mean, std, acc = benchmark_onnx(original_model, images, labels, runs=args.runs)
     results.append(('ONNX Original', mean, std, acc))
     print(f"  Latency: {mean:.3f} ± {std:.3f} ms, Accuracy: {acc:.1f}%")
 
     # ONNX Runtime with binary model
     print("\n[ONNX Runtime - Binary] Benchmarking...")
-    mean, std, acc = benchmark_onnx(binary_model, images, labels)
+    mean, std, acc = benchmark_onnx(binary_model, images, labels, runs=args.runs)
     results.append(('ONNX Binary', mean, std, acc))
     print(f"  Latency: {mean:.3f} ± {std:.3f} ms, Accuracy: {acc:.1f}%")
 
     # TBN Float (original model, no quantization)
     print("\n[TBN Float] Benchmarking...")
-    mean, std, acc = benchmark_tbn(original_model, images, labels, quantized=False)
+    mean, std, acc = benchmark_tbn(original_model, images, labels, quantized=False, runs=args.runs, tiling=args.tiling)
     results.append(('TBN (float)', mean, std, acc))
     print(f"  Latency: {mean:.3f} ± {std:.3f} ms, Accuracy: {acc:.1f}%")
 
     # TBN Quantized with original model (on-the-fly quantization)
     print("\n[TBN Quantized - On-the-fly] Benchmarking...")
-    mean, std, acc = benchmark_tbn(original_model, images, labels, quantized=True)
+    mean, std, acc = benchmark_tbn(original_model, images, labels, quantized=True, runs=args.runs, tiling=args.tiling)
     results.append(('TBN (on-the-fly)', mean, std, acc))
     print(f"  Latency: {mean:.3f} ± {std:.3f} ms, Accuracy: {acc:.1f}%")
 
     # TBN Quantized with pre-quantized binary model
     print("\n[TBN Quantized - Pre-quantized] Benchmarking...")
-    mean, std, acc = benchmark_tbn(binary_model, images, labels, quantized=True)
+    mean, std, acc = benchmark_tbn(binary_model, images, labels, quantized=True, runs=args.runs, tiling=args.tiling)
     results.append(('TBN (pre-quant)', mean, std, acc))
     print(f"  Latency: {mean:.3f} ± {std:.3f} ms, Accuracy: {acc:.1f}%")
 

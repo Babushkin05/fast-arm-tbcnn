@@ -506,6 +506,100 @@ Tensor im2col(const Tensor& input, int64_t kernel_h, int64_t kernel_w,
     return col;
 }
 
+// Fused im2col + float-to-ternary quantization
+// Writes directly into TernaryMatrix bit-planes — no intermediate float buffer
+TernaryMatrix im2col_ternary_packed(
+    const float* input, int64_t N, int64_t C, int64_t H, int64_t W,
+    int64_t kernel_h, int64_t kernel_w,
+    int64_t stride_h, int64_t stride_w,
+    int64_t pad_h, int64_t pad_w,
+    int64_t dilation_h, int64_t dilation_w,
+    uint32_t m_padded, uint32_t k_padded,
+    float threshold_low, float threshold_high)
+{
+    // Output dimensions
+    int64_t out_h = (H + 2 * pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h + 1;
+    int64_t out_w = (W + 2 * pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w + 1;
+
+    int64_t m_orig = N * out_h * out_w;  // rows = N*OH*OW
+    int64_t k_orig = C * kernel_h * kernel_w;  // cols = C*KH*KW
+
+    // Allocate bit-plane vectors (zero-initialized = all zeros = padding)
+    const uint32_t rowBytes = k_padded / 8;
+    const std::size_t totalBytes = static_cast<std::size_t>(m_padded) * rowBytes;
+    std::vector<std::uint8_t> positive(totalBytes, 0);
+    std::vector<std::uint8_t> negative(totalBytes, 0);
+
+    // Fast path: contiguous kernel rows (stride=1, pad=0, dilation=1)
+    const bool is_contiguous = (stride_h == 1 && stride_w == 1 &&
+                                 pad_h == 0 && pad_w == 0 &&
+                                 dilation_h == 1 && dilation_w == 1);
+
+    for (int64_t n = 0; n < N; ++n) {
+        for (int64_t oh = 0; oh < out_h; ++oh) {
+            for (int64_t ow = 0; ow < out_w; ++ow) {
+                int64_t row_idx = (n * out_h + oh) * out_w + ow;
+                uint8_t* rowP = positive.data() + row_idx * rowBytes;
+                uint8_t* rowM = negative.data() + row_idx * rowBytes;
+
+                if (is_contiguous) {
+                    for (int64_t c = 0; c < C; ++c) {
+                        for (int64_t kh = 0; kh < kernel_h; ++kh) {
+                            int64_t ih = oh + kh;
+                            if (ih >= H) continue;
+                            int64_t in_base = ((n * C + c) * H + ih) * W + ow;
+                            int64_t col_base = (c * kernel_h + kh) * kernel_w;
+
+                            for (int64_t kw = 0; kw < kernel_w; ++kw) {
+                                int64_t iw = ow + kw;
+                                if (iw >= W) continue;
+
+                                int64_t col_idx = col_base + kw;
+                                uint32_t byteIdx = static_cast<uint32_t>(col_idx) / 8;
+                                uint8_t bit = static_cast<uint8_t>(1u << (col_idx & 7));
+
+                                float v = input[in_base + kw];
+                                if (v < threshold_low) {
+                                    rowM[byteIdx] |= bit;
+                                } else if (v > threshold_high) {
+                                    rowP[byteIdx] |= bit;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // General path with padding/dilation
+                    for (int64_t c = 0; c < C; ++c) {
+                        for (int64_t kh = 0; kh < kernel_h; ++kh) {
+                            for (int64_t kw = 0; kw < kernel_w; ++kw) {
+                                int64_t ih = oh * stride_h - pad_h + kh * dilation_h;
+                                int64_t iw = ow * stride_w - pad_w + kw * dilation_w;
+
+                                int64_t col_idx = (c * kernel_h + kh) * kernel_w + kw;
+                                uint32_t byteIdx = static_cast<uint32_t>(col_idx) / 8;
+                                uint8_t bit = static_cast<uint8_t>(1u << (col_idx & 7));
+
+                                if (ih >= 0 && ih < H && iw >= 0 && iw < W) {
+                                    float v = input[((n * C + c) * H + ih) * W + iw];
+                                    if (v < threshold_low) {
+                                        rowM[byteIdx] |= bit;
+                                    } else if (v > threshold_high) {
+                                        rowP[byteIdx] |= bit;
+                                    }
+                                }
+                                // else: outside bounds → value = 0 (bits remain 0)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return TernaryMatrix::from_bitplanes(std::move(positive), std::move(negative),
+                                          m_padded, k_padded);
+}
+
 Tensor col2im(const Tensor& col, const Shape& input_shape,
               int64_t kernel_h, int64_t kernel_w,
               int64_t stride_h, int64_t stride_w, int64_t pad_h, int64_t pad_w,

@@ -6,6 +6,7 @@
 #include "tbn/runtime/model.hpp"
 #include "tbn/runtime/tensor.hpp"
 #include "tbn/onnx_integration/onnx_parser.hpp"
+#include "tbn/operators/quantized_gemm.hpp"
 
 namespace py = pybind11;
 using namespace tbn;
@@ -52,7 +53,11 @@ py::array_t<float> tensor_to_numpy(const Tensor& tensor) {
 // Python wrapper for Model
 class PyModel {
 public:
-    PyModel(const std::string& path) {
+    PyModel(const std::string& path, const std::string& tiling = "") {
+        if (!tiling.empty()) {
+            tiling_config::set_by_name(tiling);
+            TBN_LOG_INFO("TBN: using tiling preset: " + tiling);
+        }
         model_ = load_onnx_model(path);
         session_ = std::make_unique<TBNModel::Session>(model_.create_session());
     }
@@ -128,7 +133,7 @@ PYBIND11_MODULE(_tbn, m) {
 
     // Model class
     py::class_<PyModel>(m, "Model")
-        .def(py::init<const std::string&>(), py::arg("path"))
+        .def(py::init<const std::string&, const std::string&>(), py::arg("path"), py::arg("tiling") = "")
         .def("run", &PyModel::run, py::arg("input"), py::arg("use_quantization") = false)
         .def("run_quantized", &PyModel::run_quantized, py::arg("input"))
         .def("input_names", &PyModel::get_input_names)
@@ -136,7 +141,17 @@ PYBIND11_MODULE(_tbn, m) {
         .def("input_shape", &PyModel::get_input_shape, py::arg("name"));
 
     // Convenience function
-    m.def("load_model", [](const std::string& path) {
-        return PyModel(path);
-    }, py::arg("path"), "Load an ONNX model");
+    m.def("load_model", [](const std::string& path, const std::string& tiling) {
+        return PyModel(path, tiling);
+    }, py::arg("path"), py::arg("tiling") = "", "Load an ONNX model");
+
+    // Tiling configuration
+    m.def("set_tiling", [](const std::string& name) {
+        tiling_config::set_by_name(name);
+    }, py::arg("name"), "Set tiling parameters by device name (raspberry_pi, samsung_a52, m4_pro)");
+
+    m.def("list_tiling_presets", []() {
+        std::vector<std::string> presets = {"raspberry_pi", "samsung_a52", "m4_pro"};
+        return presets;
+    }, "List available tiling preset names");
 }

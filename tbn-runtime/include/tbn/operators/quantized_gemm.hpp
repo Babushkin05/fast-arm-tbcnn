@@ -28,9 +28,42 @@ namespace device_params {
         return {.mblk = 256, .nblk = 512, .kblk = 512, .mmk = 16, .nmk = 8};
     }
 
-    // Default (optimized for embedded/low-power devices)
+// Default — auto-detected at compile time
     constexpr TilingParams default_device() {
-        return raspberry_pi();
+#if defined(__APPLE__) && defined(__aarch64__)
+        // Apple Silicon (M1/M2/M3/M4): large L1 (128KB+), L2 (4MB+)
+        return {.mblk = 256, .nblk = 512, .kblk = 512, .mmk = 32, .nmk = 16};
+#elif defined(__aarch64__)
+        // Generic ARM64 (Raspberry Pi, Android, etc.)
+        return {.mblk = 128, .nblk = 256, .kblk = 256, .mmk = 16, .nmk = 8};
+#else
+        // x86 or unknown
+        return {.mblk = 128, .nblk = 256, .kblk = 256, .mmk = 16, .nmk = 8};
+#endif
+    }
+
+    // Named device presets for runtime selection
+    inline const TilingParams& get_preset(const std::string& name) {
+        static const auto rpi = raspberry_pi();
+        static const auto a52 = samsung_a52();
+        static const auto m4  = m4_pro();
+        static const auto def = default_device();
+        if (name == "raspberry_pi" || name == "rpi") return rpi;
+        if (name == "samsung_a52" || name == "a52") return a52;
+        if (name == "m4_pro" || name == "m4") return m4;
+        return def;
+    }
+}
+
+// Runtime tiling configuration — can be set via Python bindings, env var, or auto-detected
+namespace tiling_config {
+    inline TilingParams current_tiling = device_params::default_device();
+
+    inline void set_tiling(const TilingParams& p) { current_tiling = p; }
+    inline const TilingParams& get() { return current_tiling; }
+
+    inline void set_by_name(const std::string& name) {
+        current_tiling = device_params::get_preset(name);
     }
 }
 
@@ -88,6 +121,21 @@ Tensor qlinear_matmul_binary_blocked_packed(const Tensor& a,
                                             const TilingParams& params,
                                             float threshold_low = -0.1f,
                                             float threshold_high = 0.1f);
+
+// GEMM with both A and B pre-packed — zero conversions (fused im2col + ternarize)
+// a_packed: pre-packed ternary activations (from im2col_ternary_packed)
+// b_packed: pre-packed binary weights
+// m_orig, n_orig: original (unpadded) output dimensions
+Tensor qlinear_matmul_binary_blocked_prepacked(const TernaryMatrix& a_packed,
+                                                const BinaryMatrix& b_packed,
+                                                uint32_t m_orig, uint32_t n_orig,
+                                                float scale,
+                                                const TilingParams& params);
+
+// Runtime device detection and tiling configuration
+// Call once at startup to auto-detect optimal tiling for current CPU.
+// Set TBN_TILING=raspberry_pi|samsung_a52|m4_pro to override.
+void configure_tiling_for_current_device();
 
 // Check if float weights are already binary (all values are -1, 0, or +1)
 bool is_binary_float_weights(const float* data, size_t count);

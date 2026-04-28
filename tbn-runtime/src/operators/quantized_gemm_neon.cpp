@@ -309,6 +309,47 @@ Tensor qlinear_matmul_binary_blocked_packed(
 }
 
 // ============================================================================
+// GEMM with both A and B pre-packed — zero conversions
+// ============================================================================
+Tensor qlinear_matmul_binary_blocked_prepacked(
+    const TernaryMatrix& a_packed,
+    const BinaryMatrix& b_packed,
+    uint32_t m_orig, uint32_t n_orig,
+    float scale,
+    const TilingParams& params
+) {
+    uint32_t M = m_orig;
+    uint32_t N = n_orig;
+    uint32_t n_padded = b_packed.cols();
+
+    // Both matrices already packed — skip all conversions
+    GemmEngine engine;
+    Int32Matrix result = engine.compute(a_packed.view(), b_packed.view(), params);
+
+    // Extract the valid region
+    Tensor output({M, N}, DataType::FLOAT32);
+    float* out_data = output.typed_data<float>();
+
+    if (N == n_padded) {
+        for (uint32_t i = 0; i < M; ++i) {
+            const std::int32_t* src = result.data().data() + i * n_padded;
+            float* dst = out_data + i * N;
+            for (uint32_t j = 0; j < N; ++j) {
+                dst[j] = static_cast<float>(src[j]) * scale;
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < M; ++i) {
+            for (uint32_t j = 0; j < N; ++j) {
+                out_data[i * N + j] = static_cast<float>(result.at(i, j)) * scale;
+            }
+        }
+    }
+
+    return output;
+}
+
+// ============================================================================
 // Helper: Check if float weights are already binary (all values are -1 or +1)
 // ============================================================================
 bool is_binary_float_weights(const float* data, size_t count) {

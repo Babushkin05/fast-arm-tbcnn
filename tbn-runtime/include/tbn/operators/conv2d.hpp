@@ -4,6 +4,7 @@
 #include "../runtime/types.hpp"
 #include "../utils/errors.hpp"
 #include "../utils/logging.hpp"
+#include "../../../../GeMM/05-final/GeMM.hpp"
 #include <vector>
 
 namespace tbn {
@@ -79,6 +80,17 @@ namespace impl {
     Tensor im2col(const Tensor& input, int64_t kernel_h, int64_t kernel_w,
                   int64_t stride_h, int64_t stride_w, int64_t pad_h, int64_t pad_w,
                   int64_t dilation_h, int64_t dilation_w);
+
+    // Fused: im2col + float-to-ternary quantization in single pass
+    // Writes directly into TernaryMatrix bit-planes, no intermediate float buffer
+    TernaryMatrix im2col_ternary_packed(
+        const float* input, int64_t N, int64_t C, int64_t H, int64_t W,
+        int64_t kernel_h, int64_t kernel_w,
+        int64_t stride_h, int64_t stride_w,
+        int64_t pad_h, int64_t pad_w,
+        int64_t dilation_h, int64_t dilation_w,
+        uint32_t m_padded, uint32_t k_padded,
+        float threshold_low, float threshold_high);
 
     Tensor col2im(const Tensor& col, const Shape& input_shape,
                   int64_t kernel_h, int64_t kernel_w,

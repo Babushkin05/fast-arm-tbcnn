@@ -83,6 +83,16 @@ public:
         float threshold_high = 0.1f
     );
 
+    /// Construct from pre-built bit-plane vectors (for fused im2col+ternarize, etc.)
+    [[nodiscard]] static TernaryMatrix from_bitplanes(
+        std::vector<std::uint8_t> positive,
+        std::vector<std::uint8_t> negative,
+        std::uint32_t rows,
+        std::uint32_t cols
+    ) {
+        return TernaryMatrix(std::move(positive), std::move(negative), rows, cols);
+    }
+
     [[nodiscard]] std::uint32_t rows() const noexcept { return rows_; }
     [[nodiscard]] std::uint32_t cols() const noexcept { return cols_; }
     [[nodiscard]] TernaryMatrixView view() const noexcept {

@@ -437,13 +437,7 @@ public:
                             int64_t kW_conv = w4d_shape.dims[3];
                             int64_t K_conv = C_in * kH_conv * kW_conv;
 
-                            // im2col: [N, C, H, W] -> [N*OH*OW, C*kH*kW]
-                            Tensor col = impl::im2col(X, kH_conv, kW_conv,
-                                                       params.stride_h, params.stride_w,
-                                                       params.pad_h, params.pad_w,
-                                                       params.dilation_h, params.dilation_w);
-
-                            // Output dims
+                            // Output dims (computed before im2col for padding)
                             const auto& x_shape = X.shape();
                             int64_t N_batch = x_shape.dims[0];
                             int64_t H_in = x_shape.dims[2];
@@ -474,14 +468,32 @@ public:
                                     std::span<const int8_t>(b_int8.data(), b_int8.size()),
                                     k_padded, n_padded);
                                 entry.n_orig = static_cast<uint32_t>(M_out);
-                                entry.tiling = device_params::default_device();
+                                entry.tiling = tiling_config::get();
                                 packed_it = cached_packed_b_.emplace(packed_key, std::move(entry)).first;
                             }
 
-                            // GEMM with pre-packed bina<｜end▁of▁thinking｜> weights: col [N*OH*OW, K] @ packed_W [K, M]
-                            Tensor result_2d = qlinear_matmul_binary_blocked_packed(
-                                col, packed_it->second.matrix, packed_it->second.n_orig,
-                                1.0f, packed_it->second.tiling);
+                            // Fused: im2col + float->ternary quantization in single pass
+                            // Eliminates ~15MB intermediate float im2col buffer
+                            const auto& tp = packed_it->second.tiling;
+                            uint32_t m_orig = static_cast<uint32_t>(N_batch * out_h * out_w);
+                            uint32_t m_padded = ((m_orig + tp.mmk - 1) / tp.mmk) * tp.mmk;
+                            uint32_t k_padded = static_cast<uint32_t>(packed_it->second.matrix.rows());
+
+                            const float* x_data = X.typed_data<float>();
+                            TernaryMatrix a_packed = impl::im2col_ternary_packed(
+                                x_data, N_batch, C_in, H_in, W_in,
+                                kH_conv, kW_conv,
+                                params.stride_h, params.stride_w,
+                                params.pad_h, params.pad_w,
+                                params.dilation_h, params.dilation_w,
+                                m_padded, k_padded,
+                                -0.1f, 0.1f);
+
+                            // GEMM: both A and B pre-packed, zero conversions
+                            Tensor result_2d = qlinear_matmul_binary_blocked_prepacked(
+                                a_packed, packed_it->second.matrix,
+                                m_orig, packed_it->second.n_orig,
+                                1.0f, tp);
 
                             // Reshape to 4D [N, M, OH, OW]
                             Shape out4d_shape{N_batch, M_out, out_h, out_w};
@@ -810,7 +822,7 @@ public:
                             std::span<const int8_t>(b_int8.data(), b_int8.size()),
                             k_padded, n_padded);
                         entry.n_orig = N_w;
-                        entry.tiling = device_params::default_device();
+                        entry.tiling = tiling_config::get();
                         packed_it = cached_packed_b_.emplace(B_name, std::move(entry)).first;
                     }
 

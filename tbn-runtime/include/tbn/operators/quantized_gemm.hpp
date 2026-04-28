@@ -15,7 +15,7 @@ namespace tbn {
 namespace device_params {
     // Raspberry Pi 4: L1=32KB, L2=1MB
     constexpr TilingParams raspberry_pi() {
-        return {.mblk = 128, .nblk = 256, .kblk = 256, .mmk = 16, .nmk = 8};
+        return {.mblk = 256, .nblk = 512, .kblk = 512, .mmk = 16, .nmk = 8};
     }
 
     // Samsung A52: L1=64KB, L2=512KB

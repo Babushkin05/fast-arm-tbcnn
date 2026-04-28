@@ -283,7 +283,7 @@ Tensor conv2d_binary(const Tensor& input, const Tensor& binary_weights,
     }
 
     // Now: col [N*out, K] @ weights_T [K, M] = output [N*out, M]
-    Tensor result_2d = qlinear_matmul_binary(col, weights_T, 1.0f);
+    Tensor result_2d = qlinear_matmul_binary(col, weights_T, 1.0f, TilingParams::default_128x128());
 
     // Step 4: Reshape output to [N, M, out_h, out_w]
     Tensor output = reshape_output_to_4d(result_2d, N, M, out_h, out_w);

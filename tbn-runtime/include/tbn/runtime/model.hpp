@@ -149,7 +149,6 @@ public:
         struct CachedPackedBinaryMatrix {
             BinaryMatrix matrix;
             uint32_t n_orig;     // original N (unpadded)
-            TilingParams tiling;
         };
         std::unordered_map<std::string, CachedPackedBinaryMatrix> cached_packed_b_;
 
@@ -157,12 +156,21 @@ public:
         std::vector<std::uint8_t> im2col_buffer_;
         std::vector<float> packed_activation_buffer_;
 
+        // Tiling parameters for GeMM microkernel
+        TilingParams tiling_params_;
+
     public:
-        Session(std::shared_ptr<ModelGraph> graph) : graph_(graph) {}
+        Session(std::shared_ptr<ModelGraph> graph,
+                TilingParams tiling = TilingParams::default_128x128())
+            : graph_(graph), tiling_params_(tiling) {}
 
         // Enable/disable quantization for faster inference
         void set_quantization(bool enable) { use_quantization_ = enable; }
         bool is_quantization_enabled() const { return use_quantization_; }
+
+        // Update tiling parameters for subsequent inferences
+        void set_tiling(const TilingParams& p) { tiling_params_ = p; }
+        const TilingParams& get_tiling() const { return tiling_params_; }
 
         void set_input(const std::string& name, const Tensor& tensor) {
             TBN_CHECK(graph_->value_info.count(name) > 0, InvalidArgumentError,
@@ -468,13 +476,12 @@ public:
                                     std::span<const int8_t>(b_int8.data(), b_int8.size()),
                                     k_padded, n_padded);
                                 entry.n_orig = static_cast<uint32_t>(M_out);
-                                entry.tiling = tiling_config::get();
                                 packed_it = cached_packed_b_.emplace(packed_key, std::move(entry)).first;
                             }
 
                             // Fused: im2col + float->ternary quantization in single pass
                             // Eliminates ~15MB intermediate float im2col buffer
-                            const auto& tp = packed_it->second.tiling;
+                            const auto& tp = tiling_params_;
                             uint32_t m_orig = static_cast<uint32_t>(N_batch * out_h * out_w);
                             uint32_t m_padded = ((m_orig + tp.mmk - 1) / tp.mmk) * tp.mmk;
                             uint32_t k_padded = static_cast<uint32_t>(packed_it->second.matrix.rows());
@@ -822,17 +829,16 @@ public:
                             std::span<const int8_t>(b_int8.data(), b_int8.size()),
                             k_padded, n_padded);
                         entry.n_orig = N_w;
-                        entry.tiling = tiling_config::get();
                         packed_it = cached_packed_b_.emplace(B_name, std::move(entry)).first;
                     }
 
                     result = qlinear_matmul_binary_blocked_packed(
                         A, packed_it->second.matrix, packed_it->second.n_orig,
-                        1.0f, packed_it->second.tiling);
+                        1.0f, tiling_params_);
                 } else {
                     TBN_LOG_DEBUG("Gemm: quantizing weights on-the-fly");
                     Tensor binary_B = quantize_to_binary(B);
-                    result = qlinear_matmul_binary(A, binary_B, 1.0f);
+                    result = qlinear_matmul_binary(A, binary_B, 1.0f, tiling_params_);
                 }
 
                 // Apply alpha and beta
@@ -1309,8 +1315,8 @@ public:
         }
     };
 
-    Session create_session() {
-        return Session(graph_);
+    Session create_session(TilingParams tiling = TilingParams::default_128x128()) {
+        return Session(graph_, tiling);
     }
 };
 

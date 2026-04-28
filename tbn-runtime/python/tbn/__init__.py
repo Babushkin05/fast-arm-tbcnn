@@ -9,10 +9,10 @@ This package provides:
 
 # Import from C++ bindings (built by pybind11)
 try:
-    from ._tbn import load_model, Model, Shape, set_tiling, list_tiling_presets
+    from ._tbn import load_model, Model, Shape
 except ImportError:
     # Fall back for development
-    from tbn import load_model, Model, Shape, set_tiling, list_tiling_presets
+    from tbn import load_model, Model, Shape
 
 # Import quantization utilities
 from .quantization import (

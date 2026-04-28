@@ -88,7 +88,7 @@ int main() {
 
         // Benchmark binary matrix multiplication
         benchmark_gemm("Float x Binary MatMul", [&]() {
-            return qlinear_matmul_binary(A, B_binary, 1.0f);
+            return qlinear_matmul_binary(A, B_binary, 1.0f, TilingParams::default_128x128());
         });
 
         // Benchmark regular GEMM for comparison
@@ -116,7 +116,7 @@ int main() {
         Tensor B_binary = create_random_tensor({n, n}, DataType::BINARY);
 
         benchmark_gemm("Binary MatMul (" + std::to_string(m) + "x" + std::to_string(n) + ")", [&]() {
-            return qlinear_matmul_binary(A, B_binary, 1.0f);
+            return qlinear_matmul_binary(A, B_binary, 1.0f, TilingParams::default_128x128());
         });
     }
 

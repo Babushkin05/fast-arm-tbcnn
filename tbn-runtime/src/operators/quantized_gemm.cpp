@@ -166,7 +166,7 @@ Tensor qlinear_matmul_ternary_packed(const Tensor& a,
     }
 
     // Call the main implementation
-    return qlinear_matmul_ternary(a, b_ternary, b_scale);
+    return qlinear_matmul_ternary(a, b_ternary, b_scale, TilingParams::default_128x128());
 }
 
 Tensor qlinear_matmul_binary_packed(const Tensor& a,
@@ -183,7 +183,7 @@ Tensor qlinear_matmul_binary_packed(const Tensor& a,
     }
 
     // Call the main implementation
-    return qlinear_matmul_binary(a, b_binary, b_scale);
+    return qlinear_matmul_binary(a, b_binary, b_scale, TilingParams::default_128x128());
 }
 
 } // namespace impl
@@ -209,12 +209,12 @@ Tensor quantize_linear_matmul(const Tensor& a, const Tensor& b,
 
 Tensor quantize_linear_matmul_ternary(const Tensor& a, const Tensor& b_ternary,
                                       float b_scale) {
-    return qlinear_matmul_ternary(a, b_ternary, b_scale);
+    return qlinear_matmul_ternary(a, b_ternary, b_scale, TilingParams::default_128x128());
 }
 
 Tensor quantize_linear_matmul_binary(const Tensor& a, const Tensor& b_binary,
                                      float b_scale) {
-    return qlinear_matmul_binary(a, b_binary, b_scale);
+    return qlinear_matmul_binary(a, b_binary, b_scale, TilingParams::default_128x128());
 }
 
 // ONNX operator wrappers
@@ -227,11 +227,11 @@ Tensor onnx_qlinear_matmul(const Tensor& a, const Tensor& a_scale, const Tensor&
 }
 
 Tensor onnx_qlinear_matmul_ternary(const Tensor& a, const Tensor& b_ternary, float b_scale) {
-    return qlinear_matmul_ternary(a, b_ternary, b_scale);
+    return qlinear_matmul_ternary(a, b_ternary, b_scale, TilingParams::default_128x128());
 }
 
 Tensor onnx_qlinear_matmul_binary(const Tensor& a, const Tensor& b_binary, float b_scale) {
-    return qlinear_matmul_binary(a, b_binary, b_scale);
+    return qlinear_matmul_binary(a, b_binary, b_scale, TilingParams::default_128x128());
 }
 
 } // namespace tbn

@@ -18,6 +18,13 @@ from pathlib import Path
 tbn_build_dir = Path(__file__).parent.parent.parent / 'tbn-runtime' / 'build' / 'python'
 sys.path.insert(0, str(tbn_build_dir))
 
+# Tiling presets for common devices (reference values, pass explicitly)
+TILING_PRESETS = {
+    'm4_pro':       dict(mblk=256, nblk=512, kblk=512, mmk=32, nmk=16),
+    'raspberry_pi': dict(mblk=256, nblk=512, kblk=512, mmk=64, nmk=16),
+    'default':      dict(mblk=64,  nblk=64,  kblk=128, mmk=32, nmk=32),
+}
+
 import onnxruntime as ort
 import tbn
 from tbn import quantize_onnx_model
@@ -103,9 +110,10 @@ def benchmark_onnx(model_path, images, labels, warmup=10, runs=100):
 def benchmark_tbn(model_path, images, labels, warmup=10, runs=100, quantized=False, tiling=None):
     """TBN benchmark."""
     if tiling:
-        tbn.set_tiling(tiling)
         print(f"  Tiling: {tiling}")
-    model = tbn.load_model(str(model_path), tiling=tiling or "")
+        model = tbn.load_model(str(model_path), **tiling)
+    else:
+        model = tbn.load_model(str(model_path))
 
     # Warmup
     for i in range(warmup):
@@ -140,18 +148,36 @@ def benchmark_tbn(model_path, images, labels, warmup=10, runs=100, quantized=Fal
 def main():
     parser = argparse.ArgumentParser(description='CIFAR-10 Benchmark: TBN vs ONNX Runtime')
     parser.add_argument('--tiling', type=str, default=None,
-                        choices=['raspberry_pi', 'samsung_a52', 'm4_pro', 'default'],
-                        help='Tiling preset for GeMM (default: auto-detect)')
+                        choices=['raspberry_pi', 'm4_pro', 'default'],
+                        help='Tiling preset for GeMM')
+    parser.add_argument('--mblk', type=int, default=None, help='Outer block rows (L2)')
+    parser.add_argument('--nblk', type=int, default=None, help='Outer block cols (L2)')
+    parser.add_argument('--kblk', type=int, default=None, help='Outer block depth (L2)')
+    parser.add_argument('--mmk', type=int, default=None, help='Microkernel rows (L1)')
+    parser.add_argument('--nmk', type=int, default=None, help='Microkernel cols (L1)')
     parser.add_argument('--runs', type=int, default=100,
                         help='Number of benchmark runs (default: 100)')
     parser.add_argument('--samples', type=int, default=100,
                         help='Number of test images (default: 100)')
     args = parser.parse_args()
 
-    # Set tiling if specified
-    if args.tiling and args.tiling != 'default':
-        tbn.set_tiling(args.tiling)
-        print(f"Tiling preset: {args.tiling}")
+    # Resolve tiling parameters: explicit params > preset > None (use C++ defaults)
+    if args.mblk is not None and args.kblk is not None and args.mmk is not None:
+        # Explicit params provided
+        tiling_params = {
+            'mblk': args.mblk,
+            'nblk': args.nblk if args.nblk is not None else args.mblk,
+            'kblk': args.kblk,
+            'mmk': args.mmk,
+            'nmk': args.nmk if args.nmk is not None else args.mmk // 2,
+        }
+        print(f"Tiling (explicit): {tiling_params}")
+    elif args.tiling:
+        tiling_params = TILING_PRESETS[args.tiling]
+        print(f"Tiling preset: {args.tiling} -> {tiling_params}")
+    else:
+        tiling_params = None
+        print("Tiling: using C++ defaults (default_128x128)")
 
     print("=" * 70)
     print("CIFAR-10 Benchmark: TBN vs ONNX Runtime")
@@ -203,19 +229,19 @@ def main():
 
     # TBN Float (original model, no quantization)
     print("\n[TBN Float] Benchmarking...")
-    mean, std, acc = benchmark_tbn(original_model, images, labels, quantized=False, runs=args.runs, tiling=args.tiling)
+    mean, std, acc = benchmark_tbn(original_model, images, labels, quantized=False, runs=args.runs, tiling=tiling_params)
     results.append(('TBN (float)', mean, std, acc))
     print(f"  Latency: {mean:.3f} ± {std:.3f} ms, Accuracy: {acc:.1f}%")
 
     # TBN Quantized with original model (on-the-fly quantization)
     print("\n[TBN Quantized - On-the-fly] Benchmarking...")
-    mean, std, acc = benchmark_tbn(original_model, images, labels, quantized=True, runs=args.runs, tiling=args.tiling)
+    mean, std, acc = benchmark_tbn(original_model, images, labels, quantized=True, runs=args.runs, tiling=tiling_params)
     results.append(('TBN (on-the-fly)', mean, std, acc))
     print(f"  Latency: {mean:.3f} ± {std:.3f} ms, Accuracy: {acc:.1f}%")
 
     # TBN Quantized with pre-quantized binary model
     print("\n[TBN Quantized - Pre-quantized] Benchmarking...")
-    mean, std, acc = benchmark_tbn(binary_model, images, labels, quantized=True, runs=args.runs, tiling=args.tiling)
+    mean, std, acc = benchmark_tbn(binary_model, images, labels, quantized=True, runs=args.runs, tiling=tiling_params)
     results.append(('TBN (pre-quant)', mean, std, acc))
     print(f"  Latency: {mean:.3f} ± {std:.3f} ms, Accuracy: {acc:.1f}%")
 

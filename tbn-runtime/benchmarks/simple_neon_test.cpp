@@ -35,13 +35,13 @@ int main() {
 
     // Warmup
     for (int i = 0; i < 3; ++i) {
-        qlinear_matmul_binary(A, B_binary, 1.0f);
+        qlinear_matmul_binary(A, B_binary, 1.0f, TilingParams::default_128x128());
     }
 
     // Benchmark
     auto start = high_resolution_clock::now();
     for (int i = 0; i < 10; ++i) {
-        qlinear_matmul_binary(A, B_binary, 1.0f);
+        qlinear_matmul_binary(A, B_binary, 1.0f, TilingParams::default_128x128());
     }
     auto end = high_resolution_clock::now();
     auto time_128 = duration_cast<microseconds>(end - start).count() / 10.0;
@@ -66,7 +66,7 @@ int main() {
 
     start = high_resolution_clock::now();
     for (int i = 0; i < 10; ++i) {
-        qlinear_matmul_binary(A2, B2, 1.0f);
+        qlinear_matmul_binary(A2, B2, 1.0f, TilingParams::default_128x128());
     }
     end = high_resolution_clock::now();
     auto time_256 = duration_cast<microseconds>(end - start).count() / 10.0;
@@ -91,7 +91,7 @@ int main() {
 
     start = high_resolution_clock::now();
     for (int i = 0; i < 5; ++i) {
-        qlinear_matmul_binary(A3, B3, 1.0f);
+        qlinear_matmul_binary(A3, B3, 1.0f, TilingParams::default_128x128());
     }
     end = high_resolution_clock::now();
     auto time_512 = duration_cast<microseconds>(end - start).count() / 5.0;

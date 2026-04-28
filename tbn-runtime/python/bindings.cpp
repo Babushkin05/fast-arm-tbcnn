@@ -6,7 +6,6 @@
 #include "tbn/runtime/model.hpp"
 #include "tbn/runtime/tensor.hpp"
 #include "tbn/onnx_integration/onnx_parser.hpp"
-#include "tbn/operators/quantized_gemm.hpp"
 
 namespace py = pybind11;
 using namespace tbn;
@@ -53,13 +52,17 @@ py::array_t<float> tensor_to_numpy(const Tensor& tensor) {
 // Python wrapper for Model
 class PyModel {
 public:
-    PyModel(const std::string& path, const std::string& tiling = "") {
-        if (!tiling.empty()) {
-            tiling_config::set_by_name(tiling);
-            TBN_LOG_INFO("TBN: using tiling preset: " + tiling);
-        }
+    PyModel(const std::string& path,
+            uint32_t mblk = 64, uint32_t nblk = 64, uint32_t kblk = 128,
+            uint32_t mmk = 32, uint32_t nmk = 32) {
+        TilingParams tiling{mblk, nblk, kblk, mmk, nmk};
+        TBN_LOG_INFO("TBN: tiling mblk=" + std::to_string(mblk) +
+                     " nblk=" + std::to_string(nblk) +
+                     " kblk=" + std::to_string(kblk) +
+                     " mmk=" + std::to_string(mmk) +
+                     " nmk=" + std::to_string(nmk));
         model_ = load_onnx_model(path);
-        session_ = std::make_unique<TBNModel::Session>(model_.create_session());
+        session_ = std::make_unique<TBNModel::Session>(model_.create_session(tiling));
     }
 
     py::array_t<float> run(py::array_t<float> input, bool use_quantization = false) {
@@ -133,7 +136,17 @@ PYBIND11_MODULE(_tbn, m) {
 
     // Model class
     py::class_<PyModel>(m, "Model")
-        .def(py::init<const std::string&, const std::string&>(), py::arg("path"), py::arg("tiling") = "")
+        .def(py::init<const std::string&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
+             py::arg("path"),
+             py::arg("mblk") = 64,
+             py::arg("nblk") = 64,
+             py::arg("kblk") = 128,
+             py::arg("mmk") = 32,
+             py::arg("nmk") = 32,
+             "Load an ONNX model with explicit tiling parameters.\n"
+             "mblk/nblk/kblk: outer block sizes (L2 cache).\n"
+             "mmk/nmk: microkernel sizes (L1 cache).\n"
+             "Constraints: n %% 128 == 0, kblk %% 128 == 0, m %% mmk == 0, k %% nmk == 0.")
         .def("run", &PyModel::run, py::arg("input"), py::arg("use_quantization") = false)
         .def("run_quantized", &PyModel::run_quantized, py::arg("input"))
         .def("input_names", &PyModel::get_input_names)
@@ -141,17 +154,15 @@ PYBIND11_MODULE(_tbn, m) {
         .def("input_shape", &PyModel::get_input_shape, py::arg("name"));
 
     // Convenience function
-    m.def("load_model", [](const std::string& path, const std::string& tiling) {
-        return PyModel(path, tiling);
-    }, py::arg("path"), py::arg("tiling") = "", "Load an ONNX model");
-
-    // Tiling configuration
-    m.def("set_tiling", [](const std::string& name) {
-        tiling_config::set_by_name(name);
-    }, py::arg("name"), "Set tiling parameters by device name (raspberry_pi, samsung_a52, m4_pro)");
-
-    m.def("list_tiling_presets", []() {
-        std::vector<std::string> presets = {"raspberry_pi", "samsung_a52", "m4_pro"};
-        return presets;
-    }, "List available tiling preset names");
+    m.def("load_model", [](const std::string& path,
+                            uint32_t mblk, uint32_t nblk, uint32_t kblk,
+                            uint32_t mmk, uint32_t nmk) {
+        return PyModel(path, mblk, nblk, kblk, mmk, nmk);
+    }, py::arg("path"),
+       py::arg("mblk") = 64,
+       py::arg("nblk") = 64,
+       py::arg("kblk") = 128,
+       py::arg("mmk") = 32,
+       py::arg("nmk") = 32,
+       "Load an ONNX model with explicit tiling parameters.");
 }

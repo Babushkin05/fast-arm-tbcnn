@@ -8,6 +8,8 @@
  */
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
+#include <cmath>
 #include <chrono>
 #include <iostream>
 #include <vector>
@@ -206,10 +208,15 @@ vector<float> naive_inference(const vector<float>& input_image, const Cifar10Mod
     return fc2;
 }
 
-int main() {
+int main(int argc, char** argv) {
     srand(42);
-    const int WARMUP = 2;
-    const int RUNS = 10;
+    const int WARMUP = 5;
+    const int RUNS = 30;
+
+    double optimized_ref = 0.0;
+    if (argc > 1) {
+        optimized_ref = stod(argv[1]);
+    }
 
     Cifar10ModelNaive model;
     vector<float> input(1 * 3 * 32 * 32);
@@ -220,24 +227,35 @@ int main() {
         naive_inference(input, model);
 
     // Benchmark
+    double latencies[RUNS];
     double total_ms = 0;
+    double min_ms = 1e9, max_ms = 0;
     for (int r = 0; r < RUNS; ++r) {
         auto t0 = chrono::high_resolution_clock::now();
         auto result = naive_inference(input, model);
         auto t1 = chrono::high_resolution_clock::now();
         double ms = chrono::duration<double, milli>(t1 - t0).count();
+        latencies[r] = ms;
         total_ms += ms;
+        if (ms < min_ms) min_ms = ms;
+        if (ms > max_ms) max_ms = ms;
         cout << "Run " << (r+1) << ": " << ms << " ms" << endl;
     }
 
     double avg = total_ms / RUNS;
-    cout << "\nNaive inference (scalar, no im2col, no NEON, no quantization)" << endl;
-    cout << "Average latency: " << avg << " ms" << endl;
+    double var = 0;
+    for (int r = 0; r < RUNS; ++r)
+        var += (latencies[r] - avg) * (latencies[r] - avg);
+    double std = sqrt(var / RUNS);
 
-    // Compare with our optimized: TBN pre-quantized = 0.579 ms
-    double our_optimized = 0.579;
-    cout << "Optimized TBN pre-quantized: " << our_optimized << " ms" << endl;
-    cout << "Speedup: " << (avg / our_optimized) << "x" << endl;
+    cout << "\nNaive inference (scalar, no im2col, no NEON, no quantization, -O0)" << endl;
+    cout << "Average latency: " << avg << " ± " << std << " ms" << endl;
+    cout << "Min: " << min_ms << " ms, Max: " << max_ms << " ms" << endl;
+
+    if (optimized_ref > 0.0) {
+        cout << "\nOptimized reference: " << optimized_ref << " ms" << endl;
+        cout << "Speedup: " << (avg / optimized_ref) << "x" << endl;
+    }
 
     return 0;
 }

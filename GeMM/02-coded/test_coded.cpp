@@ -128,4 +128,7 @@ TEST_CASE("Case 1") {
     auto Cl = UnpackTernaryRowMajor(Cp, Cm, m, k);
 
     CompareWithGlobalC(Cl, m, k);
+
+    delete[] Ap; delete[] Am; delete[] Bb;
+    delete[] Cp; delete[] Cm; delete[] Cl;
 }

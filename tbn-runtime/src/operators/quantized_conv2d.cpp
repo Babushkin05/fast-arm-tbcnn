@@ -225,20 +225,14 @@ Tensor qlinear_conv2d_ternary_packed(const Tensor& x,
                                      const Tensor& w_packed,
                                      float w_scale,
                                      const Conv2DParams& params) {
-    TBN_LOG_WARNING("Ternary packed Conv2D not fully implemented, using naive approach");
-    // For now, just use the ternary tensor as-is
-    // TODO: Implement proper bit-packed ternary convolution
-    return Tensor(); // Placeholder
+    throw NotImplementedError("Ternary packed Conv2D not yet implemented");
 }
 
 Tensor qlinear_conv2d_binary_packed(const Tensor& x,
                                     const Tensor& w_packed,
                                     float w_scale,
                                     const Conv2DParams& params) {
-    TBN_LOG_WARNING("Binary packed Conv2D not fully implemented, using naive approach");
-    // For now, just use the binary tensor as-is
-    // TODO: Implement proper bit-packed binary convolution
-    return Tensor(); // Placeholder
+    throw NotImplementedError("Binary packed Conv2D not yet implemented");
 }
 
 } // namespace impl

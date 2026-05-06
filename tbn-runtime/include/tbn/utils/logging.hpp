@@ -1,8 +1,6 @@
 #pragma once
 
 #include <iostream>
-#include <sstream>
-#include <cstring>
 #include <mutex>
 #include <chrono>
 #include <string>
@@ -54,10 +52,6 @@ public:
     }
 };
 
-// Implementation in cpp file to avoid ODR violations
-// extern LogLevel Logger::global_level_;
-// extern std::mutex Logger::mutex_;
-
 #define TBN_LOG_COMPONENT(name) \
     static tbn::Logger logger(tbn::LogLevel::INFO, name)
 
@@ -80,6 +74,3 @@ public:
     } while(0)
 
 } // namespace tbn
-
-// Include implementation
-// Static members defined in src/utils/logging.cpp

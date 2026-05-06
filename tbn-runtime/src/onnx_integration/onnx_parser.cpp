@@ -20,41 +20,8 @@
 #include <onnx/onnx_pb.h>
 #include <onnx/onnx-operators_pb.h>
 #else
-// Dummy types for compilation without ONNX
-namespace onnx {
-    class TensorProto;
-    class ValueInfoProto;
-    class ModelProto {
-    public:
-        bool ParseFromIstream(std::istream*) { return false; }
-        bool ParseFromArray(const void*, int) { return false; }
-        std::string producer_name() const { return ""; }
-        std::string producer_version() const { return ""; }
-        int64_t model_version() const { return 0; }
-        struct Graph {
-            struct Node {
-                int node_size() const { return 0; }
-            };
-            int node_size() const { return 0; }
-            int input_size() const { return 0; }
-            int output_size() const { return 0; }
-            int initializer_size() const { return 0; }
-            int value_info_size() const { return 0; }
-        };
-        const Graph& graph() const { static Graph g; return g; }
-    };
-}
+#error "TBN_ONNX_RUNTIME_ENABLED requires the ONNX library (libonnx). Install via: brew install onnx"
 #endif
-
-// Include standard headers
-#include <cstdint>
-#include <string>
-#include <fstream>
-#include <unordered_map>
-#include <algorithm>
-#include <iostream>
-#include <sstream>
-#include <iostream>
 
 namespace tbn {
 

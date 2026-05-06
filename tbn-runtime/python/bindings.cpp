@@ -56,7 +56,7 @@ public:
             uint32_t mblk = 64, uint32_t nblk = 64, uint32_t kblk = 128,
             uint32_t mmk = 32, uint32_t nmk = 32) {
         TilingParams tiling{mblk, nblk, kblk, mmk, nmk};
-        TBN_LOG_INFO("TBN: tiling mblk=" + std::to_string(mblk) +
+        TBN_LOG_DEBUG("TBN: tiling mblk=" + std::to_string(mblk) +
                      " nblk=" + std::to_string(nblk) +
                      " kblk=" + std::to_string(kblk) +
                      " mmk=" + std::to_string(mmk) +
